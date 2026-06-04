@@ -47,7 +47,9 @@ export class EufySecurityPlugin
   private deviceInfos = new Map<string, DeviceInfo>();
   private stationInfos = new Map<string, StationInfo>();
   private connecting = false;
+  private reconnecting = false;
   private reconnectAttempt = 0;
+  private stableResetTimer?: ReturnType<typeof setTimeout>;
   private captchaId?: string;
   private captchaImageB64?: string;
 
@@ -105,7 +107,7 @@ export class EufySecurityPlugin
       this.client = await createEufyClient(config);
       this.registerClientEvents(this.client);
       this.streamManager = new StreamManager(this.client);
-      this.reconnectAttempt = 0;
+      this.markStable();
 
       // Clear one-shot auth inputs after a successful connect.
       this.storage.removeItem("tfa_code");
@@ -148,18 +150,47 @@ export class EufySecurityPlugin
     });
   }
 
-  /** Reconnect with exponential backoff (2s → 60s cap). */
+  /**
+   * Mark the current connection as healthy. The backoff counter is only reset
+   * once the link has stayed up for a while, so a flapping connection keeps
+   * backing off instead of hammering the Eufy cloud (which triggers CAPTCHA).
+   */
+  private markStable(): void {
+    if (this.stableResetTimer) {
+      clearTimeout(this.stableResetTimer);
+    }
+    this.stableResetTimer = setTimeout(() => {
+      this.reconnectAttempt = 0;
+    }, 120_000);
+  }
+
+  /**
+   * Reconnect with exponential backoff (2s → 60s cap). Single-flight: only one
+   * reconnect chain runs at a time, so a burst of `disconnected` events cannot
+   * spawn parallel re-login attempts. Reuses the existing client (token reuse)
+   * rather than re-authenticating with username/password.
+   */
   private async scheduleReconnect(): Promise<void> {
+    if (this.reconnecting) {
+      return;
+    }
+    this.reconnecting = true;
     const wait = backoffDelay(this.reconnectAttempt);
     this.reconnectAttempt += 1;
     this.logger.info(`reconnect attempt ${this.reconnectAttempt} in ${wait}ms`);
     await delay(wait);
     try {
-      await this.streamManager?.stopAll();
-      await this.client?.disconnect().catch(() => undefined);
-      await this.connect();
+      await this.streamManager?.stopAll().catch(() => undefined);
+      if (this.client) {
+        await this.client.reconnect();
+      } else {
+        await this.connect();
+      }
+      this.markStable();
+      this.reconnecting = false;
     } catch (err) {
       this.logger.error("reconnect failed", err);
+      this.reconnecting = false;
       void this.scheduleReconnect();
     }
   }

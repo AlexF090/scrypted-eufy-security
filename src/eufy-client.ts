@@ -11,10 +11,15 @@
  * Both implement {@link IEufyClient}. {@link createEufyClient} tries direct first
  * and transparently falls back to the child process on a crypto error.
  */
-import { EventEmitter } from "events";
 import { ChildProcess, fork } from "child_process";
-import { PassThrough, type Readable } from "stream";
+import { EventEmitter } from "events";
 import path from "path";
+import { PassThrough, type Readable } from "stream";
+import type {
+  ChildConfig,
+  ChildMessage,
+  ParentMessage,
+} from "./fallback/ipc-protocol";
 import {
   EufyCryptoError,
   PanTiltDirection,
@@ -24,7 +29,6 @@ import {
   type StationInfo,
   type StreamMetadata,
 } from "./types";
-import type { ChildConfig, ChildMessage, ParentMessage } from "./fallback/ipc-protocol";
 import { Logger, isCryptoPaddingError, makeRequestId } from "./utils";
 
 /** Build the serialisable subset of config handed to the child process. */
@@ -77,10 +81,16 @@ export class DirectEufyClient extends EventEmitter implements IEufyClient {
       this.registerEvents();
 
       if (this.config.tfaCode) {
-        await this.client.connect({ verifyCode: this.config.tfaCode, force: false });
+        await this.client.connect({
+          verifyCode: this.config.tfaCode,
+          force: false,
+        });
       } else if (this.config.captchaAnswer && this.config.captchaId) {
         await this.client.connect({
-          captcha: { captchaId: this.config.captchaId, captchaCode: this.config.captchaAnswer },
+          captcha: {
+            captchaId: this.config.captchaId,
+            captchaCode: this.config.captchaAnswer,
+          },
           force: false,
         });
       } else {
@@ -88,10 +98,26 @@ export class DirectEufyClient extends EventEmitter implements IEufyClient {
       }
     } catch (err) {
       if (isCryptoPaddingError(err)) {
-        throw new EufyCryptoError("legacy PKCS1 padding rejected by runtime", err);
+        throw new EufyCryptoError(
+          "legacy PKCS1 padding rejected by runtime",
+          err,
+        );
       }
       throw err;
     }
+  }
+
+  /**
+   * Reconnect the already-initialized client using the persisted token. Avoids
+   * re-running {@link connect}, which would create a fresh `EufySecurity`
+   * instance and re-authenticate with username/password.
+   */
+  async reconnect(): Promise<void> {
+    if (!this.client) {
+      await this.connect();
+      return;
+    }
+    await this.client.connect({ force: false });
   }
 
   private registerEvents(): void {
@@ -139,7 +165,11 @@ export class DirectEufyClient extends EventEmitter implements IEufyClient {
     );
     client.on(
       "station talkback start",
-      (_station: Stat, device: Dev, talkbackStream: import("eufy-security-client").TalkbackStream) => {
+      (
+        _station: Stat,
+        device: Dev,
+        talkbackStream: import("eufy-security-client").TalkbackStream,
+      ) => {
         this.talkbackStreams.set(device.getSerial(), talkbackStream);
         this.emit("talkbackStart", device.getSerial());
       },
@@ -199,7 +229,10 @@ export class DirectEufyClient extends EventEmitter implements IEufyClient {
     return station.isLiveStreaming(device);
   }
 
-  async panAndTilt(deviceSerial: string, direction: PanTiltDirection): Promise<void> {
+  async panAndTilt(
+    deviceSerial: string,
+    direction: PanTiltDirection,
+  ): Promise<void> {
     const client = this.requireClient();
     const device = await client.getDevice(deviceSerial);
     const station = await client.getStation(device.getStationSerial());
@@ -228,10 +261,18 @@ export class DirectEufyClient extends EventEmitter implements IEufyClient {
   }
 
   async setGuardMode(stationSerial: string, mode: number): Promise<void> {
-    await this.requireClient().setStationProperty(stationSerial, "guardMode", mode);
+    await this.requireClient().setStationProperty(
+      stationSerial,
+      "guardMode",
+      mode,
+    );
   }
 
-  async setDeviceProperty(serial: string, name: string, value: unknown): Promise<void> {
+  async setDeviceProperty(
+    serial: string,
+    name: string,
+    value: unknown,
+  ): Promise<void> {
     await this.requireClient().setDeviceProperty(serial, name, value);
   }
 
@@ -242,7 +283,9 @@ export class DirectEufyClient extends EventEmitter implements IEufyClient {
 }
 
 /** Best-effort online check from the device `state` property (1 === online). */
-function isDeviceOnline(device: import("eufy-security-client").Device): boolean {
+function isDeviceOnline(
+  device: import("eufy-security-client").Device,
+): boolean {
   try {
     return Number(device.getPropertyValue("state")) === 1;
   } catch {
@@ -264,9 +307,13 @@ function toStreamMetadata(
 }
 
 /** Read the device's cached snapshot picture buffer, if present. */
-function readPictureBuffer(device: import("eufy-security-client").Device): Buffer | undefined {
+function readPictureBuffer(
+  device: import("eufy-security-client").Device,
+): Buffer | undefined {
   try {
-    const picture = device.getPropertyValue("picture") as { data?: Buffer } | undefined;
+    const picture = device.getPropertyValue("picture") as
+      | { data?: Buffer }
+      | undefined;
     return picture?.data;
   } catch {
     return undefined;
@@ -287,7 +334,10 @@ interface ChildStreamPair {
  * Out-of-process client that proxies every {@link IEufyClient} call to the
  * legacy-crypto child wrapper over IPC.
  */
-export class ChildProcessEufyClient extends EventEmitter implements IEufyClient {
+export class ChildProcessEufyClient
+  extends EventEmitter
+  implements IEufyClient
+{
   private readonly logger: Logger;
   private child?: ChildProcess;
   private readonly pending = new Map<string, PendingRequest>();
@@ -302,6 +352,18 @@ export class ChildProcessEufyClient extends EventEmitter implements IEufyClient 
 
   async connect(): Promise<void> {
     await this.spawnChild();
+    await this.request("connect", {});
+  }
+
+  /**
+   * Reconnect over the existing child process if it is still alive, reusing the
+   * persisted token; otherwise fall back to a full {@link connect}.
+   */
+  async reconnect(): Promise<void> {
+    if (!this.child || this.child.killed) {
+      await this.connect();
+      return;
+    }
     await this.request("connect", {});
   }
 
@@ -331,7 +393,9 @@ export class ChildProcessEufyClient extends EventEmitter implements IEufyClient 
   }
 
   private onChildExit(code: number | null): void {
-    this.logger.warn(`child exited (code ${code}); rejecting ${this.pending.size} pending`);
+    this.logger.warn(
+      `child exited (code ${code}); rejecting ${this.pending.size} pending`,
+    );
     for (const [, p] of this.pending) {
       p.reject(new Error("child process exited"));
     }
@@ -399,7 +463,10 @@ export class ChildProcessEufyClient extends EventEmitter implements IEufyClient 
         this.emit("motionDetected", msg.deviceSerial, msg.state);
         break;
       case "event:livestreamStart": {
-        const pair: ChildStreamPair = { video: new PassThrough(), audio: new PassThrough() };
+        const pair: ChildStreamPair = {
+          video: new PassThrough(),
+          audio: new PassThrough(),
+        };
         this.streams.set(msg.deviceSerial, pair);
         this.emit("livestreamStart", {
           deviceSerial: msg.deviceSerial,
@@ -443,7 +510,10 @@ export class ChildProcessEufyClient extends EventEmitter implements IEufyClient 
         this.emit("deviceAdded", msg.device);
         break;
       default:
-        this.logger.debug("unhandled child message", (msg as { type: string }).type);
+        this.logger.debug(
+          "unhandled child message",
+          (msg as { type: string }).type,
+        );
     }
   }
 
@@ -497,7 +567,10 @@ export class ChildProcessEufyClient extends EventEmitter implements IEufyClient 
     return (await this.request("isLiveStreaming", { deviceSerial })) as boolean;
   }
 
-  async panAndTilt(deviceSerial: string, direction: PanTiltDirection): Promise<void> {
+  async panAndTilt(
+    deviceSerial: string,
+    direction: PanTiltDirection,
+  ): Promise<void> {
     await this.request("panAndTilt", { deviceSerial, direction });
   }
 
@@ -514,19 +587,28 @@ export class ChildProcessEufyClient extends EventEmitter implements IEufyClient 
   }
 
   async transmitAudio(deviceSerial: string, buffer: Buffer): Promise<void> {
-    await this.request("transmitAudio", { deviceSerial, bufferB64: buffer.toString("base64") });
+    await this.request("transmitAudio", {
+      deviceSerial,
+      bufferB64: buffer.toString("base64"),
+    });
   }
 
   async setGuardMode(stationSerial: string, mode: number): Promise<void> {
     await this.request("setGuardMode", { stationSerial, mode });
   }
 
-  async setDeviceProperty(serial: string, name: string, value: unknown): Promise<void> {
+  async setDeviceProperty(
+    serial: string,
+    name: string,
+    value: unknown,
+  ): Promise<void> {
     await this.request("setProperty", { serial, name, value });
   }
 
   async getSnapshot(deviceSerial: string): Promise<Buffer | undefined> {
-    const b64 = (await this.request("getSnapshot", { deviceSerial })) as string | null;
+    const b64 = (await this.request("getSnapshot", { deviceSerial })) as
+      | string
+      | null;
     return b64 ? Buffer.from(b64, "base64") : undefined;
   }
 }
@@ -536,7 +618,9 @@ export class ChildProcessEufyClient extends EventEmitter implements IEufyClient 
  * first; on a crypto-padding failure ({@link EufyCryptoError}) it transparently
  * falls back to the legacy-crypto child process.
  */
-export async function createEufyClient(config: EufyPluginConfig): Promise<IEufyClient> {
+export async function createEufyClient(
+  config: EufyPluginConfig,
+): Promise<IEufyClient> {
   const log = new Logger("EufyFactory");
   try {
     const client = new DirectEufyClient(config);

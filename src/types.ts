@@ -99,6 +99,12 @@ export interface StreamMetadata {
  */
 export interface IEufyClient extends EventEmitter {
   connect(): Promise<void>;
+  /**
+   * Re-establish the cloud session on the *existing* client, reusing the
+   * persisted token. Used for transient disconnects so we do not re-run the
+   * full username/password login (which triggers Eufy's CAPTCHA rate limit).
+   */
+  reconnect(): Promise<void>;
   disconnect(): Promise<void>;
   getStations(): Promise<StationInfo[]>;
   getDevices(): Promise<DeviceInfo[]>;
@@ -111,7 +117,11 @@ export interface IEufyClient extends EventEmitter {
   stopTalkback(deviceSerial: string): Promise<void>;
   transmitAudio(deviceSerial: string, buffer: Buffer): Promise<void>;
   setGuardMode(stationSerial: string, mode: number): Promise<void>;
-  setDeviceProperty(serial: string, name: string, value: unknown): Promise<void>;
+  setDeviceProperty(
+    serial: string,
+    name: string,
+    value: unknown,
+  ): Promise<void>;
   /** Return the camera's most recent snapshot image, if available. */
   getSnapshot(deviceSerial: string): Promise<Buffer | undefined>;
 }
@@ -151,7 +161,10 @@ export interface EufyClientEvents {
  * factory to fall back to the legacy-crypto child process.
  */
 export class EufyCryptoError extends Error {
-  constructor(message: string, public readonly cause?: unknown) {
+  constructor(
+    message: string,
+    public readonly cause?: unknown,
+  ) {
     super(message);
     this.name = "EufyCryptoError";
   }

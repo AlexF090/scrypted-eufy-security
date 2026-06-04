@@ -13,6 +13,12 @@ module.exports = {
       "ts-jest",
       {
         tsconfig: {
+          // Jest runs on CommonJS; override the project's Node16 module
+          // settings and pull in the Jest globals (the base config restricts
+          // `types` to "node").
+          module: "CommonJS",
+          moduleResolution: "node",
+          types: ["node", "jest"],
           strict: true,
           esModuleInterop: true,
           noUnusedLocals: false,
