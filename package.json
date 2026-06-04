@@ -1,6 +1,6 @@
 {
   "name": "scrypted-eufy-security",
-  "version": "1.0.0-beta.2",
+  "version": "1.0.0-beta.3",
   "description": "Eufy Security plugin for Scrypted — direct eufy-security-client integration",
   "main": "dist/plugin.zip",
   "files": [
@@ -37,7 +37,7 @@
   "peerDependencies": {
     "@scrypted/sdk": "*"
   },
-  "dependencies": {
+  "optionalDependencies": {
     "eufy-security-client": "^3.7.0"
   },
   "devDependencies": {

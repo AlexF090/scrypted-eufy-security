@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0-beta.3] - 2026-06-04
+
+### Fixed
+
+- Load `eufy-security-client` as a runtime (optional) dependency instead of
+  webpack-bundling it. Bundling stripped the package's JSON data files
+  (e.g. `i18n-iso-countries/codes.json`), which made every country code fail
+  validation with `Invalid ISO 3166-1 Alpha-2 country code`. Scrypted now
+  installs the dependency on the target host, keeping its data and native
+  bindings intact. Plugin bundle drops from ~2.9 MB to ~57 KB.
+
 ## [1.0.0-beta.2] - 2026-06-04
 
 ### Fixed
