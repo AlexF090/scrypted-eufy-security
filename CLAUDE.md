@@ -848,7 +848,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [18.x, 20.x]
+        node-version: [22.x, 24.x]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -875,7 +875,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20.x"
+          node-version: "24.x"
           registry-url: "https://registry.npmjs.org"
           cache: "npm"
       - run: npm ci
@@ -896,7 +896,7 @@ jobs:
 - Kein globaler Mutable State außer Plugin-Singleton
 - Jede exportierte Klasse und public Methode hat JSDoc
 - ESLint `@typescript-eslint/recommended` — 0 Warnings
-- Node.js `18` und `20` müssen beide funktionieren (CI Matrix)
+- Node.js `22` und `24` müssen beide funktionieren (CI Matrix)
 
 ---
 
