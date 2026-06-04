@@ -162,6 +162,8 @@ export class EufySecurityPlugin
     this.stableResetTimer = setTimeout(() => {
       this.reconnectAttempt = 0;
     }, 120_000);
+    // Don't let this background timer keep the process (or test runner) alive.
+    this.stableResetTimer.unref?.();
   }
 
   /**

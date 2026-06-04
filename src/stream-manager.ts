@@ -162,6 +162,7 @@ export class StreamManager extends EventEmitter {
       physical.cleanupTimer = setTimeout(() => {
         void this.stopPhysicalStream(deviceSerial);
       }, this.opts.cleanupGraceMs);
+      physical.cleanupTimer.unref?.();
     }
   }
 

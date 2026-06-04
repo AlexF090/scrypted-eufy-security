@@ -352,7 +352,18 @@ export class ChildProcessEufyClient
 
   async connect(): Promise<void> {
     await this.spawnChild();
-    await this.request("connect", {});
+    // Forward one-shot auth inputs so 2FA / CAPTCHA can complete over the
+    // fallback path, mirroring DirectEufyClient.connect().
+    if (this.config.tfaCode) {
+      await this.request("verifyCode", { code: this.config.tfaCode });
+    } else if (this.config.captchaAnswer && this.config.captchaId) {
+      await this.request("verifyCaptcha", {
+        captchaId: this.config.captchaId,
+        captcha: this.config.captchaAnswer,
+      });
+    } else {
+      await this.request("connect", {});
+    }
   }
 
   /**
