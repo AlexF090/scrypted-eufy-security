@@ -15,6 +15,15 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm test
-      - run: npm publish --access public
+      - name: Publish (prerelease -> beta tag, stable -> latest)
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          if [[ "$VERSION" == *-* ]]; then
+            echo "Prerelease $VERSION -> npm dist-tag 'beta'"
+            npm publish --access public --tag beta
+          else
+            echo "Stable $VERSION -> npm dist-tag 'latest'"
+            npm publish --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

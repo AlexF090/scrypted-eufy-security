@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [1.0.0-beta.1] - 2026-06-04
+
+### Notes
+
+- First beta. Code-complete and green on build/lint/unit tests, but not yet
+  verified against real HomeBase 3 / E330 / C210 hardware. Published under the
+  npm `beta` dist-tag; install with `scrypted-eufy-security@beta`.
+
 ## [1.0.0] - 2026-06-04
 
 ### Added

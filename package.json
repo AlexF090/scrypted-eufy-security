@@ -1,8 +1,11 @@
 {
   "name": "scrypted-eufy-security",
-  "version": "1.0.0",
+  "version": "1.0.0-beta.1",
   "description": "Eufy Security plugin for Scrypted — direct eufy-security-client integration",
   "main": "dist/plugin.zip",
+  "files": [
+    "dist/plugin.zip"
+  ],
   "scripts": {
     "build": "scrypted-webpack",
     "tsc": "tsc",
