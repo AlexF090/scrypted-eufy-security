@@ -2,12 +2,18 @@
   "name": "scrypted-eufy-security",
   "version": "1.0.0",
   "description": "Eufy Security plugin for Scrypted — direct eufy-security-client integration",
-  "main": "dist/main.js",
+  "main": "dist/plugin.zip",
   "scripts": {
-    "build": "tsc",
+    "build": "scrypted-webpack",
+    "tsc": "tsc",
     "test": "jest --passWithNoTests",
     "lint": "eslint 'src/**/*.ts'",
-    "prepublishOnly": "npm run build && npm test"
+    "scrypted-setup-project": "scrypted-setup-project",
+    "prescrypted-setup-project": "scrypted-package-json",
+    "scrypted-deploy": "scrypted-deploy",
+    "scrypted-deploy-debug": "scrypted-deploy-debug",
+    "scrypted-debug": "scrypted-debug",
+    "prepublishOnly": "NODE_ENV=production scrypted-webpack"
   },
   "scrypted": {
     "name": "Eufy Security",
