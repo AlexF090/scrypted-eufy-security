@@ -18,10 +18,10 @@ import sdk, {
   type Settings,
 } from "@scrypted/sdk";
 import path from "path";
-import { createEufyClient } from "./eufy-client";
-import { StreamManager } from "./stream-manager";
 import { EufyCamera } from "./camera";
+import { createEufyClient } from "./eufy-client";
 import { EufyStation } from "./station";
+import { StreamManager } from "./stream-manager";
 import {
   type DeviceInfo,
   type EufyPluginConfig,
@@ -55,7 +55,9 @@ export class EufySecurityPlugin
     super(nativeId);
     // Attempt to connect on startup if credentials are already stored.
     if (this.storage.getItem("username") && this.storage.getItem("password")) {
-      this.connect().catch((err) => this.logger.error("initial connect failed", err));
+      this.connect().catch((err) =>
+        this.logger.error("initial connect failed", err),
+      );
     }
   }
 
@@ -68,13 +70,16 @@ export class EufySecurityPlugin
       "eufy-persistent",
     );
     return {
-      username: this.storage.getItem("username") ?? "",
+      username: (this.storage.getItem("username") ?? "").trim(),
       password: this.storage.getItem("password") ?? "",
-      country: this.storage.getItem("country") ?? "DE",
-      language: this.storage.getItem("language") ?? "de",
+      country: (this.storage.getItem("country") || "DE").trim().toUpperCase(),
+      language: (this.storage.getItem("language") || "de").trim().toLowerCase(),
       persistentDir,
-      trustedDeviceName: this.storage.getItem("trustedDeviceName") ?? "scrypted-plugin",
-      eventDurationSeconds: Number(this.storage.getItem("eventDuration") ?? "30"),
+      trustedDeviceName:
+        this.storage.getItem("trustedDeviceName") ?? "scrypted-plugin",
+      eventDurationSeconds: Number(
+        this.storage.getItem("eventDuration") ?? "30",
+      ),
       p2pConnectionSetupTimeout: 120000,
       tfaCode: this.storage.getItem("tfa_code") || undefined,
       captchaAnswer: this.storage.getItem("captcha_answer") || undefined,
@@ -206,7 +211,9 @@ export class EufySecurityPlugin
     for (const device of manifest) {
       await deviceManager.onDeviceDiscovered(device);
     }
-    this.logger.info(`discovered ${devices.length} cameras, ${stations.length} stations`);
+    this.logger.info(
+      `discovered ${devices.length} cameras, ${stations.length} stations`,
+    );
     return [];
   }
 
@@ -274,12 +281,42 @@ export class EufySecurityPlugin
 
   async getSettings(): Promise<Setting[]> {
     const settings: Setting[] = [
-      { key: "username", title: "Eufy E-Mail", type: "string", value: this.storage.getItem("username") ?? "" },
-      { key: "password", title: "Eufy Passwort", type: "password", value: this.storage.getItem("password") ?? "" },
-      { key: "country", title: "Land (z.B. DE)", type: "string", value: this.storage.getItem("country") ?? "DE" },
-      { key: "language", title: "Sprache (z.B. de)", type: "string", value: this.storage.getItem("language") ?? "de" },
-      { key: "eventDuration", title: "Bewegung Reset (Sek.)", type: "number", value: this.storage.getItem("eventDuration") ?? "30" },
-      { key: "tfa_code", title: "2FA Code (falls nötig)", type: "string", value: "" },
+      {
+        key: "username",
+        title: "Eufy E-Mail",
+        type: "string",
+        value: this.storage.getItem("username") ?? "",
+      },
+      {
+        key: "password",
+        title: "Eufy Passwort",
+        type: "password",
+        value: this.storage.getItem("password") ?? "",
+      },
+      {
+        key: "country",
+        title: "Land (z.B. DE)",
+        type: "string",
+        value: this.storage.getItem("country") ?? "DE",
+      },
+      {
+        key: "language",
+        title: "Sprache (z.B. de)",
+        type: "string",
+        value: this.storage.getItem("language") ?? "de",
+      },
+      {
+        key: "eventDuration",
+        title: "Bewegung Reset (Sek.)",
+        type: "number",
+        value: this.storage.getItem("eventDuration") ?? "30",
+      },
+      {
+        key: "tfa_code",
+        title: "2FA Code (falls nötig)",
+        type: "string",
+        value: "",
+      },
     ];
 
     if (this.captchaImageB64) {
@@ -317,7 +354,9 @@ export class EufySecurityPlugin
     if (reconnectKeys.includes(key)) {
       await this.client?.disconnect().catch(() => undefined);
       this.client = undefined;
-      await this.connect().catch((err) => this.logger.error("connect after setting failed", err));
+      await this.connect().catch((err) =>
+        this.logger.error("connect after setting failed", err),
+      );
     }
     await this.onDeviceEvent(ScryptedInterface.Settings, undefined);
   }

@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0-beta.2] - 2026-06-04
+
+### Fixed
+
+- Country/language settings are now trimmed and case-normalized before being
+  passed to `eufy-security-client`. A trailing newline/space in the country
+  field caused `Invalid ISO 3166-1 Alpha-2 country code` on connect.
+
 ## [1.0.0-beta.1] - 2026-06-04
 
 ### Notes
