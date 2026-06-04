@@ -1,76 +1,77 @@
 # Scrypted Eufy Security Plugin
 
+**English** | [Deutsch](README.de.md)
+
 Direct [`eufy-security-client`](https://github.com/bropat/eufy-security-client)
 integration for [Scrypted](https://www.scrypted.app/) — no WebSocket bridge, no
 middleware, no Docker, no Home Assistant. The plugin talks P2P to your HomeBase
 directly from the Scrypted process and lets Scrypted bridge your cameras to
-HomeKit (incl. HomeKit Secure Video), Google Home and Home Assistant.
+HomeKit (including HomeKit Secure Video), Google Home and Home Assistant.
 
 ## Features
 
-- ✅ Direkte eufy-security-client Integration — keine Middleware, kein externer Prozess
-- ✅ Eufy HomeBase 3 (S380) Unterstützung
-- ✅ HomeKit Secure Video (HKSV) via Scrypted HomeKit Plugin
-- ✅ P2P Livestreaming (H.264/H.265)
-- ✅ Bewegungserkennung (Person, Tier, Fahrzeug, Sound)
-- ✅ Two-Way Audio / Talkback
-- ✅ PTZ Pan/Tilt für Indoor Cam C210
-- ✅ Guard Mode (Weg / Zuhause / Aus)
-- ✅ Automatischer Reconnect mit Exponential Backoff
-- ✅ Node.js 18+ kompatibel (via enableEmbeddedPKCS1Support)
-- ✅ Fallback auf Legacy-Crypto Child-Process wenn nötig
-- ⚠️ HomeBase 3: Max. 1 Stream gleichzeitig (Hardware-Limitierung)
+- ✅ Direct `eufy-security-client` integration — no middleware, no external process
+- ✅ Eufy HomeBase 3 (S380) support
+- ✅ HomeKit Secure Video (HKSV) via the Scrypted HomeKit plugin
+- ✅ P2P livestreaming (H.264 / H.265)
+- ✅ Motion detection (person, pet, vehicle, sound)
+- ✅ Two-way audio / talkback
+- ✅ PTZ pan/tilt for the Indoor Cam C210
+- ✅ Guard Mode (Away / Home / Off)
+- ✅ Automatic reconnect with exponential backoff
+- ✅ Node.js 18+ compatible (via `enableEmbeddedPKCS1Support`)
+- ✅ Falls back to a legacy-crypto child process when needed
+- ⚠️ HomeBase 3: max. 1 stream at a time (hardware limitation)
 
-## Voraussetzungen
+## Requirements
 
-1. Scrypted (Docker, HA Add-on, oder nativ)
-2. Scrypted HomeKit Plugin (für HomeKit Secure Video)
-3. Eufy-Account Credentials
-4. Kein weiteres Tool nötig — Plugin ist self-contained
+1. Scrypted (Docker, Home Assistant add-on, or native)
+2. Scrypted HomeKit plugin (for HomeKit Secure Video)
+3. Eufy account credentials
+4. Nothing else — the plugin is self-contained
 
 ## Installation
 
-In Scrypted: Plugin Store → "Eufy Security" suchen → Installieren.
-Zugangsdaten in Settings eintragen → Geräte werden automatisch erkannt.
+In Scrypted: **Plugin Store → search "Eufy Security" → Install**.
+Enter your credentials in Settings → devices are discovered automatically.
 
-## HomeKit einrichten
+## HomeKit Setup
 
-1. Plugin installiert, Kameras erkannt
-2. Kamera in Scrypted → HomeKit → "Zu HomeKit hinzufügen"
-3. QR-Code in Apple Home App scannen
-4. HKSV ist automatisch aktiv wenn iCloud-Plan vorhanden (Home 50GB+)
+1. Install the plugin and let it discover your cameras.
+2. In Scrypted, open a camera → **HomeKit → "Add to HomeKit"**.
+3. Scan the QR code in the Apple Home app.
+4. HKSV activates automatically if you have an iCloud plan (Home 50 GB+).
 
-## Bekannte Einschränkungen
+## Known Limitations
 
-- HomeBase 3: Nur 1 Kamera gleichzeitig streambar (Eufy Hardware-Limit)
-- RTSP-Direktzugriff auf HomeBase 3 seit Firmware März 2026 defekt
-  (wird umgangen: Plugin nutzt P2P direkt)
-- Stream-Start: 3–10 Sekunden (P2P-Verbindungsaufbau zur HomeBase)
+- **HomeBase 3:** only one camera can stream at a time (Eufy hardware limit).
+- **RTSP** direct access to HomeBase 3 has been broken since the March 2026
+  firmware — the plugin works around it by using P2P directly.
+- **Stream start** takes 3–10 seconds (P2P connection setup to the HomeBase).
 
-## Crypto-Kompatibilität (Node.js 18+)
+## Crypto Compatibility (Node.js 18+)
 
-Eufy-Geräte verwenden `RSA_PKCS1_PADDING` im P2P-Protokoll, das Node.js 18+
-standardmäßig ablehnt (CVE-2023-46809). Das Plugin geht in dieser Reihenfolge
-vor:
+Eufy devices use `RSA_PKCS1_PADDING` in the P2P protocol, which Node.js 18+
+rejects by default (CVE-2023-46809). The plugin handles this in two stages:
 
-1. **Primär:** `EufySecurity.initialize({ enableEmbeddedPKCS1Support: true })` —
-   P2P läuft nativ im Node-Prozess von Scrypted.
-2. **Fallback:** Automatischer Child-Process mit `--openssl-legacy-provider`,
-   sobald ein Crypto-Fehler erkannt wird. Vollständig im Plugin enthalten, kein
-   externer Download.
+1. **Primary:** `EufySecurity.initialize({ enableEmbeddedPKCS1Support: true })` —
+   P2P runs natively inside the Scrypted Node process.
+2. **Fallback:** an automatic child process with `--openssl-legacy-provider`,
+   triggered as soon as a crypto error is detected. Fully bundled with the
+   plugin — no external download.
 
-## Architektur
+## Architecture
 
 ```
 Scrypted Process
   EufySecurityPlugin (DeviceProvider, Settings, DeviceDiscovery)
-    ├── EufyClient   (DirectEufyClient | ChildProcessEufyClient)
-    ├── StreamManager (Session-Lifecycle, HomeBase-3-Limit)
+    ├── EufyClient    (DirectEufyClient | ChildProcessEufyClient)
+    ├── StreamManager (session lifecycle, HomeBase 3 limit)
     ├── EufyCamera[]  (Camera, VideoCamera, MotionSensor, Intercom, [PanTiltZoom])
     └── EufyStation[] (SecuritySystem)
 ```
 
-## Entwicklung
+## Development
 
 ```bash
 npm ci
@@ -79,6 +80,6 @@ npm run build
 npm test
 ```
 
-## Lizenz
+## License
 
 Apache-2.0
