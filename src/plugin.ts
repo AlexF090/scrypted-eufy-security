@@ -418,8 +418,7 @@ export class EufySecurityPlugin
       // await) so that concurrent getDevice() calls can find and wait on it
       // even if they arrive before our first suspension point.
       const priorInFlight = this.connectInFlight;
-      let newInFlight: Promise<void>;
-      newInFlight = (async () => {
+      const newInFlight = (async () => {
         await priorInFlight?.catch(() => undefined);
         await this.client?.disconnect().catch(() => undefined);
         this.client = undefined;
