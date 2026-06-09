@@ -163,6 +163,12 @@ export class DirectEufyClient extends EventEmitter implements IEufyClient {
         videoStream: Readable,
         audioStream: Readable,
       ) => {
+        videoStream.on("error", (err) =>
+          this.emit("livestreamError", device.getSerial(), err),
+        );
+        audioStream.on("error", (err) =>
+          this.emit("livestreamError", device.getSerial(), err),
+        );
         this.emit("livestreamStart", {
           deviceSerial: device.getSerial(),
           metadata: toStreamMetadata(metadata),
@@ -184,6 +190,15 @@ export class DirectEufyClient extends EventEmitter implements IEufyClient {
         device: Dev,
         talkbackStream: import("eufy-security-client").TalkbackStream,
       ) => {
+        (talkbackStream as unknown as import("events").EventEmitter).on(
+          "error",
+          (err: Error) =>
+            this.emit(
+              "livestreamError",
+              device.getSerial(),
+              err,
+            ),
+        );
         this.talkbackStreams.set(device.getSerial(), talkbackStream);
         this.emit("talkbackStart", device.getSerial());
       },
@@ -413,6 +428,9 @@ export class ChildProcessEufyClient
       this.child.on("error", (err) => {
         this.logger.error("child process error", err);
         this.readyReject?.(err);
+        this.readyResolve = undefined;
+        this.readyReject = undefined;
+        this.child?.removeAllListeners();
       });
     });
   }

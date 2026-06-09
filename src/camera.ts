@@ -21,17 +21,20 @@ import sdk, {
 } from "@scrypted/sdk";
 import net from "net";
 import type { Readable } from "stream";
-import type { IEufyClient, DeviceInfo } from "./types";
-import type { StreamManager, StreamSession } from "./stream-manager";
 import { PtzController, type PanTiltZoomCommand } from "./ptz";
+import type { StreamManager, StreamSession } from "./stream-manager";
 import { TalkbackController } from "./talkback";
+import type { DeviceInfo, IEufyClient } from "./types";
 import { Logger, withTimeout } from "./utils";
 
 const { mediaManager } = sdk;
 
-/** Host a raw stream on an ephemeral localhost TCP port; resolves with the port. */
-function hostStreamOnTcp(stream: Readable, log: Logger): Promise<number> {
-  return new Promise<number>((resolve, reject) => {
+/** Host a raw stream on an ephemeral localhost TCP port. */
+function hostStreamOnTcp(
+  stream: Readable,
+  log: Logger,
+): Promise<{ port: number; server: net.Server }> {
+  return new Promise((resolve, reject) => {
     const server = net.createServer((socket) => {
       stream.pipe(socket);
       socket.on("error", () => undefined);
@@ -42,12 +45,13 @@ function hostStreamOnTcp(stream: Readable, log: Logger): Promise<number> {
       const address = server.address();
       if (address && typeof address === "object") {
         log.debug(`hosting stream on tcp ${address.port}`);
-        resolve(address.port);
+        resolve({ port: address.port, server });
       } else {
+        server.close();
         reject(new Error("failed to bind TCP server"));
       }
     });
-    // Close the server once the source ends; the socket already has the data.
+    // Auto-close when the source stream ends.
     stream.on("close", () => server.close());
   });
 }
@@ -73,6 +77,7 @@ export class EufyCamera
   private readonly talkback: TalkbackController;
   private motionTimer?: NodeJS.Timeout;
   private activeSession?: StreamSession;
+  private activeTcpServers: net.Server[] = [];
 
   constructor(
     nativeId: string,
@@ -129,12 +134,37 @@ export class EufyCamera
 
   async getVideoStream(options?: RequestMediaStreamOptions): Promise<MediaObject> {
     void options;
+
+    // Release any previous session so we don't accumulate TCP servers.
+    if (this.activeSession) {
+      await this.activeSession.release().catch(() => undefined);
+      this.activeSession = undefined;
+      for (const srv of this.activeTcpServers) srv.close();
+      this.activeTcpServers = [];
+    }
+
     const session = await this.streamManager.requestStream(this.deviceInfo.serial);
     this.activeSession = session;
 
     const videoCodec = /hevc|h265/i.test(session.metadata.videoCodec) ? "hevc" : "h264";
-    const videoPort = await hostStreamOnTcp(session.videoStream, this.logger);
-    const audioPort = await hostStreamOnTcp(session.audioStream, this.logger);
+
+    let videoResult: { port: number; server: net.Server };
+    let audioResult: { port: number; server: net.Server };
+    try {
+      videoResult = await hostStreamOnTcp(session.videoStream, this.logger);
+      try {
+        audioResult = await hostStreamOnTcp(session.audioStream, this.logger);
+      } catch (err) {
+        videoResult.server.close();
+        throw err;
+      }
+    } catch (err) {
+      await session.release().catch(() => undefined);
+      this.activeSession = undefined;
+      throw err;
+    }
+
+    this.activeTcpServers = [videoResult.server, audioResult.server];
 
     const ffmpegInput: FFmpegInput = {
       url: undefined,
@@ -143,11 +173,11 @@ export class EufyCamera
         "-f",
         videoCodec,
         "-i",
-        `tcp://127.0.0.1:${videoPort}`,
+        `tcp://127.0.0.1:${videoResult.port}`,
         "-f",
         "aac",
         "-i",
-        `tcp://127.0.0.1:${audioPort}`,
+        `tcp://127.0.0.1:${audioResult.port}`,
       ],
     };
 
@@ -243,5 +273,8 @@ export class EufyCamera
     }
     await this.talkback.stop().catch(() => undefined);
     await this.activeSession?.release().catch(() => undefined);
+    this.activeSession = undefined;
+    for (const srv of this.activeTcpServers) srv.close();
+    this.activeTcpServers = [];
   }
 }

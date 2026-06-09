@@ -57,7 +57,12 @@ export class TalkbackController {
     }
     this.active = true;
 
-    await this.client.startTalkback(this.deviceSerial);
+    try {
+      await this.client.startTalkback(this.deviceSerial);
+    } catch (err) {
+      this.active = false;
+      throw err;
+    }
 
     this.ffmpeg = spawn(input.ffmpegPath, [...input.inputArguments, ...PCM_ARGS], {
       stdio: ["ignore", "pipe", "pipe"],
@@ -78,6 +83,8 @@ export class TalkbackController {
 
     this.ffmpeg.on("exit", (code) => {
       this.log.debug(`ffmpeg exited (code ${code})`);
+      // active is already false when stop() initiates the kill; only
+      // trigger cleanup when the exit is unexpected.
       if (this.active) {
         void this.stop();
       }
@@ -89,9 +96,11 @@ export class TalkbackController {
     if (!this.active) {
       return;
     }
+    // Set active = false BEFORE the kill so the exit handler does not re-enter.
     this.active = false;
 
     if (this.ffmpeg) {
+      this.ffmpeg.removeAllListeners();
       this.ffmpeg.kill("SIGKILL");
       this.ffmpeg = undefined;
     }

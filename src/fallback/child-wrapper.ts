@@ -161,10 +161,10 @@ class ChildWrapper {
           deviceSerial,
           metadata: toStreamMetadata(metadata),
         });
-        this.pipeStream(videoStream, (chunkB64) =>
+        this.pipeStream(deviceSerial, videoStream, (chunkB64) =>
           send({ type: "event:livestreamVideoChunk", deviceSerial, chunkB64 }),
         );
-        this.pipeStream(audioStream, (chunkB64) =>
+        this.pipeStream(deviceSerial, audioStream, (chunkB64) =>
           send({ type: "event:livestreamAudioChunk", deviceSerial, chunkB64 }),
         );
       },
@@ -198,9 +198,15 @@ class ChildWrapper {
   }
 
   /** Forward a raw stream to the parent as base64 chunks. */
-  private pipeStream(stream: Readable, emit: (chunkB64: string) => void): void {
+  private pipeStream(
+    deviceSerial: string,
+    stream: Readable,
+    emit: (chunkB64: string) => void,
+  ): void {
     stream.on("data", (chunk: Buffer) => emit(chunk.toString("base64")));
-    stream.on("error", () => undefined);
+    stream.on("error", (err: Error) =>
+      send({ type: "event:livestreamError", deviceSerial, message: err.message }),
+    );
   }
 
   private require(): EufySecurity {

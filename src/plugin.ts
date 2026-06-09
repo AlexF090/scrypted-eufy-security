@@ -424,11 +424,13 @@ export class EufySecurityPlugin
           [...this.cameras.values()].map((c) => c.cleanup().catch(() => undefined)),
         );
         await this.streamManager?.stopAll().catch(() => undefined);
+        this.streamManager?.destroy();
         this.cameras.clear();
         this.stations.clear();
         this.deviceInfos.clear();
         this.stationInfos.clear();
         this.streamManager = undefined;
+        this.client?.removeAllListeners();
         await this.client?.disconnect().catch(() => undefined);
         this.client = undefined;
         await this.doConnect();
