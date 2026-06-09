@@ -147,6 +147,28 @@ describe("DirectEufyClient", () => {
   });
 });
 
+describe("DirectEufyClient error event handling", () => {
+  it("emittiert disconnected ohne throw wenn inner client error emittiert", async () => {
+    const fake = new FakeEufySecurity();
+    FakeEufySecurity.initialize.mockImplementation(async () => fake);
+
+    const client = new DirectEufyClient(config);
+    await client.connect();
+
+    const disconnectedEvents: unknown[] = [];
+    client.on("disconnected", () => disconnectedEvents.push(true));
+
+    expect(() => {
+      (fake as unknown as import("events").EventEmitter).emit(
+        "error",
+        new Error("internal eufy error"),
+      );
+    }).not.toThrow();
+
+    expect(disconnectedEvents).toHaveLength(1);
+  });
+});
+
 describe("ChildProcessEufyClient", () => {
   it("connects and proxies commands over IPC", async () => {
     const client = new ChildProcessEufyClient(config);

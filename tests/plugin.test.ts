@@ -89,6 +89,43 @@ describe("EufySecurityPlugin discovery", () => {
   });
 });
 
+describe("EufySecurityPlugin startup race", () => {
+  it("getDevice wartet auf discoverDevices auch wenn client bereits gesetzt", async () => {
+    let resolveDiscover!: () => void;
+    const discoverBlocker = new Promise<void>((res) => {
+      resolveDiscover = res;
+    });
+
+    fakeClient = new FakeClient([], [station]);
+    fakeClient.getDevices = jest.fn(async () => {
+      await discoverBlocker;
+      return [baseDevice({})];
+    });
+    fakeClient.getStations = jest.fn(async () => {
+      await discoverBlocker;
+      return [station];
+    });
+
+    const plugin = new EufySecurityPlugin("eufy");
+    plugin.storage.setItem("username", "u@example.com");
+    plugin.storage.setItem("password", "pw");
+    plugin.storage.setItem("eventDuration", "2");
+
+    // Start connect, aber kein await — connect läuft jetzt asynchron.
+    const connectResult = plugin.putSetting("password", "pw");
+
+    // getDevice im Race-Fenster aufrufen (discoverDevices blockiert noch).
+    const devicePromise = plugin.getDevice("CAM1");
+
+    // discoverDevices freigeben.
+    resolveDiscover();
+
+    await connectResult;
+    const device = await devicePromise;
+    expect(device).toBeDefined();
+  });
+});
+
 describe("EufySecurityPlugin device routing", () => {
   it("resets motion after the configured duration", async () => {
     jest.useFakeTimers();

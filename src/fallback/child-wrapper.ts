@@ -9,6 +9,7 @@
  * Raw video/audio frames are forwarded as base64-chunked IPC events because the
  * IPC channel cannot carry live `Readable` streams.
  */
+import { EventEmitter } from "events";
 import type { Readable } from "stream";
 import {
   EufySecurity,
@@ -119,6 +120,10 @@ class ChildWrapper {
   private registerEvents(client: EufySecurity): void {
     client.on("connect", () => send({ type: "event:connected" }));
     client.on("close", () => send({ type: "event:disconnected" }));
+    (client as unknown as EventEmitter).on("error", (err: Error) => {
+      console.warn("[EufyChild] eufy-security-client error:", err?.message ?? err);
+      send({ type: "event:disconnected" });
+    });
 
     client.on("tfa request", () => send({ type: "tfa_request" }));
     client.on("captcha request", (captchaId: string, captcha: string) =>

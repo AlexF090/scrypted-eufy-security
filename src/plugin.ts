@@ -46,7 +46,8 @@ export class EufySecurityPlugin
   private readonly stations = new Map<string, EufyStation>();
   private deviceInfos = new Map<string, DeviceInfo>();
   private stationInfos = new Map<string, StationInfo>();
-  private connecting = false;
+  private discoveryDone = false;
+  private connectInFlight: Promise<void> | undefined;
   private reconnecting = false;
   private reconnectAttempt = 0;
   private stableResetTimer?: ReturnType<typeof setTimeout>;
@@ -56,10 +57,13 @@ export class EufySecurityPlugin
   constructor(nativeId?: string) {
     super(nativeId);
     // Attempt to connect on startup if credentials are already stored.
+    // Store the promise so getDevice() can await it to avoid a race where
+    // Scrypted calls getDevice for previously-known child devices before the
+    // async connect() has had a chance to populate deviceInfos.
     if (this.storage.getItem("username") && this.storage.getItem("password")) {
-      this.connect().catch((err) =>
-        this.logger.error("initial connect failed", err),
-      );
+      this.connectInFlight = this.connect().catch((err) => {
+        this.logger.error("initial connect failed", err);
+      });
     }
   }
 
@@ -91,34 +95,37 @@ export class EufySecurityPlugin
 
   // ---- Connection lifecycle --------------------------------------------------
 
+  /** Returns the in-flight connect promise if one is already running; otherwise starts a new one. */
+  private connect(): Promise<void> {
+    if (this.connectInFlight) return this.connectInFlight;
+    this.connectInFlight = this.doConnect().finally(() => {
+      this.connectInFlight = undefined;
+    });
+    return this.connectInFlight;
+  }
+
   /** Connect (or reconnect) the Eufy client and wire up events. */
-  private async connect(): Promise<void> {
-    if (this.connecting) {
+  private async doConnect(): Promise<void> {
+    this.discoveryDone = false;
+    const config = this.buildConfig();
+    if (!config.username || !config.password) {
+      this.logger.warn("missing credentials; skipping connect");
       return;
     }
-    this.connecting = true;
-    try {
-      const config = this.buildConfig();
-      if (!config.username || !config.password) {
-        this.logger.warn("missing credentials; skipping connect");
-        return;
-      }
 
-      this.client = await createEufyClient(config);
-      this.registerClientEvents(this.client);
-      this.streamManager = new StreamManager(this.client);
-      this.markStable();
+    this.client = await createEufyClient(config);
+    this.registerClientEvents(this.client);
+    this.streamManager = new StreamManager(this.client);
+    this.markStable();
 
-      // Clear one-shot auth inputs after a successful connect.
-      this.storage.removeItem("tfa_code");
-      this.storage.removeItem("captcha_answer");
-      this.captchaId = undefined;
-      this.captchaImageB64 = undefined;
+    // Clear one-shot auth inputs after a successful connect.
+    this.storage.removeItem("tfa_code");
+    this.storage.removeItem("captcha_answer");
+    this.captchaId = undefined;
+    this.captchaImageB64 = undefined;
 
-      await this.discoverDevices();
-    } finally {
-      this.connecting = false;
-    }
+    await this.discoverDevices();
+    this.discoveryDone = true;
   }
 
   private registerClientEvents(client: IEufyClient): void {
@@ -268,6 +275,14 @@ export class EufySecurityPlugin
       return this.stations.get(nativeId) as unknown as ScryptedDevice;
     }
 
+    // Wait for the initial connect + discoverDevices to complete before
+    // looking up device infos. The !this.client guard prevents a deadlock:
+    // discoverDevices() triggers onDeviceDiscovered → getDevice() re-enters
+    // here; at that point this.client is already set, so we skip the await.
+    if (this.connectInFlight && !this.discoveryDone && !this.client) {
+      await this.connectInFlight;
+    }
+
     if (!this.client || !this.streamManager) {
       throw new Error("client not connected");
     }
@@ -385,11 +400,21 @@ export class EufySecurityPlugin
       "captcha_answer",
     ];
     if (reconnectKeys.includes(key)) {
-      await this.client?.disconnect().catch(() => undefined);
-      this.client = undefined;
-      await this.connect().catch((err) =>
-        this.logger.error("connect after setting failed", err),
-      );
+      // Build and assign the new in-flight promise synchronously (before any
+      // await) so that concurrent getDevice() calls can find and wait on it
+      // even if they arrive before our first suspension point.
+      const priorInFlight = this.connectInFlight;
+      this.connectInFlight = (async () => {
+        await priorInFlight?.catch(() => undefined);
+        await this.client?.disconnect().catch(() => undefined);
+        this.client = undefined;
+        await this.doConnect();
+      })()
+        .catch((err) => this.logger.error("connect after setting failed", err))
+        .finally(() => {
+          this.connectInFlight = undefined;
+        });
+      await this.connectInFlight;
     }
     await this.onDeviceEvent(ScryptedInterface.Settings, undefined);
   }

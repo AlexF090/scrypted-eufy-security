@@ -127,6 +127,17 @@ export class DirectEufyClient extends EventEmitter implements IEufyClient {
 
     client.on("connect", () => this.emit("connected"));
     client.on("close", () => this.emit("disconnected"));
+        // Without an 'error' listener Node.js throws unhandled-error which kills
+        // the plugin process.  Forward to our own EventEmitter so callers can
+        // react (or ignore) without crashing.
+        // eufy-security-client's typed EventEmitter doesn't expose 'error' in its
+        // event map, so we attach via the base EventEmitter to avoid the TS error.
+        // This is critical: without a listener Node.js turns unhandled 'error'
+        // events into thrown exceptions that crash the plugin process.
+        (client as unknown as import("events").EventEmitter).on("error", (err: Error) => {
+          console.warn("[DirectEufyClient] eufy-security-client error event:", err?.message ?? err);
+          this.emit("disconnected");
+        });
     client.on("tfa request", () => this.emit("tfaRequest"));
     client.on("captcha request", (id: string, captcha: string) =>
       this.emit("captchaRequest", id, captcha),
