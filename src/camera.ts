@@ -159,7 +159,6 @@ export class EufyCamera
     return {
       id: "p2p",
       name: "P2P Stream",
-      container: "rawvideo",
       video: {
         codec: /e330|professional|t8600/i.test(this.deviceInfo.model) ? "h265" : "h264",
         width,

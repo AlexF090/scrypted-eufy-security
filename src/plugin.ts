@@ -248,9 +248,7 @@ export class EufySecurityPlugin
       });
     }
 
-    for (const device of manifest) {
-      await deviceManager.onDeviceDiscovered(device);
-    }
+    await deviceManager.onDevicesChanged({ devices: manifest });
     this.logger.info(
       `discovered ${devices.length} cameras, ${stations.length} stations`,
     );

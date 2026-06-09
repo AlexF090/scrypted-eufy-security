@@ -21,7 +21,9 @@
   "scrypted": {
     "name": "Eufy Security",
     "interfaces": [
-      "Settings"
+      "Settings",
+      "DeviceProvider",
+      "DeviceDiscovery"
     ],
     "deviceCreator": "EufySecurityPlugin"
   },
