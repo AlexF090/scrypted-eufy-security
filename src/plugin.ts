@@ -150,11 +150,15 @@ export class EufySecurityPlugin
     });
     client.on("deviceAdded", (device: DeviceInfo) => {
       this.deviceInfos.set(device.serial, device);
-      void this.discoverDevices();
+      void this.discoverDevices().catch((err) =>
+        this.logger.error("discoverDevices failed", err),
+      );
     });
     client.on("stationAdded", (station: StationInfo) => {
       this.stationInfos.set(station.serial, station);
-      void this.discoverDevices();
+      void this.discoverDevices().catch((err) =>
+        this.logger.error("discoverDevices failed", err),
+      );
     });
   }
 
@@ -185,11 +189,11 @@ export class EufySecurityPlugin
       return;
     }
     this.reconnecting = true;
-    const wait = backoffDelay(this.reconnectAttempt);
-    this.reconnectAttempt += 1;
-    this.logger.info(`reconnect attempt ${this.reconnectAttempt} in ${wait}ms`);
-    await delay(wait);
     try {
+      const wait = backoffDelay(this.reconnectAttempt);
+      this.reconnectAttempt += 1;
+      this.logger.info(`reconnect attempt ${this.reconnectAttempt} in ${wait}ms`);
+      await delay(wait);
       await this.streamManager?.stopAll().catch(() => undefined);
       if (this.client) {
         await this.client.reconnect();
@@ -197,11 +201,11 @@ export class EufySecurityPlugin
         await this.connect();
       }
       this.markStable();
-      this.reconnecting = false;
     } catch (err) {
       this.logger.error("reconnect failed", err);
-      this.reconnecting = false;
       void this.scheduleReconnect();
+    } finally {
+      this.reconnecting = false;
     }
   }
 

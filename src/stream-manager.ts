@@ -305,7 +305,9 @@ export class StreamManager extends EventEmitter {
       physical.consumers = consumers;
       this.streams.set(physical.deviceSerial, physical);
       await delay(this.opts.preemptPauseMs);
-      void this.restartStream(physical);
+      void this.restartStream(physical).catch((err) =>
+        this.log.error("restartStream (retry) failed", err),
+      );
     }
   }
 

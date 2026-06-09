@@ -22,9 +22,13 @@ import type { Readable } from "stream";
 import type { DeviceInfo, StationInfo, StreamMetadata } from "../types";
 import type { ChildConfig, ChildMessage, ParentMessage } from "./ipc-protocol";
 
-/** Send a typed message to the parent, no-op if the channel is gone. */
+/** Send a typed message to the parent. No-op if the IPC channel is closed. */
 function send(message: ChildMessage): void {
-  process.send?.(message);
+  try {
+    process.send?.(message);
+  } catch {
+    // IPC channel already closed — parent is gone, discard silently.
+  }
 }
 
 /** Reply to a request with a payload. */
@@ -122,11 +126,7 @@ class ChildWrapper {
     client.on("close", () => send({ type: "event:disconnected" }));
     (client as unknown as EventEmitter).on("error", (err: Error) => {
       console.warn("[EufyChild] eufy-security-client error:", err?.message ?? err);
-      try {
-        send({ type: "event:disconnected" });
-      } catch {
-        // IPC channel may already be closed
-      }
+      send({ type: "event:disconnected" });
     });
 
     client.on("tfa request", () => send({ type: "tfa_request" }));
@@ -208,13 +208,9 @@ class ChildWrapper {
     emit: (chunkB64: string) => void,
   ): void {
     stream.on("data", (chunk: Buffer) => emit(chunk.toString("base64")));
-    stream.on("error", (err: Error) => {
-      try {
-        send({ type: "event:livestreamError", deviceSerial, message: err.message });
-      } catch {
-        // IPC channel may already be closed
-      }
-    });
+    stream.on("error", (err: Error) =>
+      send({ type: "event:livestreamError", deviceSerial, message: err.message }),
+    );
   }
 
   private require(): EufySecurity {
@@ -344,8 +340,15 @@ function main(): void {
   const wrapper = new ChildWrapper(config);
 
   process.on("message", (msg: ParentMessage) => {
-    wrapper.handle(msg).catch((err) => replyError(msg.requestId, err));
+    try {
+      wrapper.handle(msg).catch((err) => replyError(msg.requestId, err));
+    } catch (err) {
+      replyError(msg.requestId, err);
+    }
   });
+
+  // Exit cleanly when the parent closes the IPC channel.
+  process.on("disconnect", () => process.exit(0));
 
   wrapper.init().catch((err) => {
     replyError(undefined, err);

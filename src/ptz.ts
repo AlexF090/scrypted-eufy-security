@@ -50,8 +50,17 @@ export class PtzController {
       return;
     }
 
+    const errors: Error[] = [];
     for (const direction of moves) {
-      await this.client.panAndTilt(this.deviceSerial, direction);
+      try {
+        await this.client.panAndTilt(this.deviceSerial, direction);
+      } catch (err) {
+        this.log.warn(`panAndTilt direction ${direction} failed`, err);
+        errors.push(err instanceof Error ? err : new Error(String(err)));
+      }
+    }
+    if (errors.length === moves.length) {
+      throw errors[0];
     }
   }
 

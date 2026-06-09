@@ -51,6 +51,8 @@ export class TalkbackController {
    * produce PCM, and forward each PCM chunk to the camera.
    */
   async start(input: TalkbackInput): Promise<void> {
+    // Guard against concurrent start() calls: claim the session immediately so
+    // a second caller sees active=true and waits for stop() before continuing.
     if (this.active) {
       this.log.debug("talkback already active; restarting");
       await this.stop();
@@ -72,8 +74,13 @@ export class TalkbackController {
       if (!this.active) {
         return;
       }
+      // Capture the current ffmpeg reference so we can detect a stop()/restart
+      // that happens while the async transmitAudio is in-flight.
+      const currentFfmpeg = this.ffmpeg;
       this.client.transmitAudio(this.deviceSerial, chunk).catch((err) => {
-        this.log.warn("transmitAudio failed", err);
+        if (this.ffmpeg === currentFfmpeg) {
+          this.log.warn("transmitAudio failed", err);
+        }
       });
     });
 
@@ -86,7 +93,9 @@ export class TalkbackController {
       // active is already false when stop() initiates the kill; only
       // trigger cleanup when the exit is unexpected.
       if (this.active) {
-        void this.stop();
+        void this.stop().catch((err) =>
+          this.log.warn("stop failed on unexpected ffmpeg exit", err),
+        );
       }
     });
   }

@@ -448,6 +448,9 @@ export class ChildProcessEufyClient
       pair.audio.destroy();
     }
     this.streams.clear();
+    // Remove all listeners from the dead child before clearing the reference so
+    // a subsequent spawnChild() does not accumulate handlers on stale objects.
+    this.child?.removeAllListeners();
     this.child = undefined;
     this.emit("disconnected");
   }
@@ -584,8 +587,17 @@ export class ChildProcessEufyClient
 
   async disconnect(): Promise<void> {
     if (this.child) {
+      const child = this.child;
       await this.request("disconnect", {}).catch(() => undefined);
-      this.child.kill();
+      child.kill();
+      // Wait up to 2 s for the child to actually exit before releasing the ref.
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 2000);
+        child.once("exit", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
       this.child = undefined;
     }
   }

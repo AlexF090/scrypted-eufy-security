@@ -76,6 +76,7 @@ export class EufyStation extends ScryptedDeviceBase implements SecuritySystem {
   async armSecuritySystem(mode: SecuritySystemMode): Promise<void> {
     const guardMode = scryptedToGuardMode(mode);
     this.logger.info(`arm → guard mode ${guardMode}`);
+    // Update local state only after the device confirms the change.
     await this.client.setGuardMode(this.stationSerial, guardMode);
     this.updateState(guardMode);
   }

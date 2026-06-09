@@ -87,6 +87,8 @@ export class EufyCamera
   private motionTimer?: NodeJS.Timeout;
   private activeSession?: StreamSession;
   private activeTcpServers: net.Server[] = [];
+  /** Serialises concurrent getVideoStream() calls. */
+  private streamRequestLock: Promise<void> = Promise.resolve();
 
   constructor(
     nativeId: string,
@@ -144,6 +146,22 @@ export class EufyCamera
   async getVideoStream(options?: RequestMediaStreamOptions): Promise<MediaObject> {
     void options;
 
+    // Serialise concurrent callers so only one TCP-server setup runs at a time.
+    let release!: () => void;
+    const prev = this.streamRequestLock;
+    this.streamRequestLock = new Promise<void>((res) => {
+      release = res;
+    });
+    await prev;
+
+    try {
+      return await this.doGetVideoStream();
+    } finally {
+      release();
+    }
+  }
+
+  private async doGetVideoStream(): Promise<MediaObject> {
     // Release any previous session so we don't accumulate TCP servers.
     if (this.activeSession) {
       await this.activeSession.release().catch(() => undefined);
