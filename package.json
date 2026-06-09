@@ -40,6 +40,12 @@
   "optionalDependencies": {
     "eufy-security-client": "^3.7.0"
   },
+  "overrides": {
+    "image-type": "^6.1.0",
+    "file-type": "^21.3.4",
+    "@rollup/plugin-terser": "^1.0.0",
+    "serialize-javascript": "^7.0.5"
+  },
   "devDependencies": {
     "@scrypted/sdk": "latest",
     "typescript": "^5.4.0",
