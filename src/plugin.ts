@@ -276,10 +276,17 @@ export class EufySecurityPlugin
     }
 
     // Wait for the initial connect + discoverDevices to complete before
-    // looking up device infos. The !this.client guard prevents a deadlock:
-    // discoverDevices() triggers onDeviceDiscovered → getDevice() re-enters
-    // here; at that point this.client is already set, so we skip the await.
-    if (this.connectInFlight && !this.discoveryDone && !this.client) {
+    // looking up device infos. The Map-check prevents a deadlock:
+    // discoverDevices() sets deviceInfos *before* calling onDeviceDiscovered,
+    // so a re-entrant getDevice() call will already find the device and skip
+    // the await. External calls during startup (known devices from a prior
+    // session) don't have the entry yet and correctly wait here.
+    if (
+      this.connectInFlight &&
+      !this.discoveryDone &&
+      !this.deviceInfos.has(nativeId) &&
+      !this.stationInfos.has(nativeId)
+    ) {
       await this.connectInFlight;
     }
 
