@@ -420,6 +420,15 @@ export class EufySecurityPlugin
       const priorInFlight = this.connectInFlight;
       const newInFlight = (async () => {
         await priorInFlight?.catch(() => undefined);
+        await Promise.all(
+          [...this.cameras.values()].map((c) => c.cleanup().catch(() => undefined)),
+        );
+        await this.streamManager?.stopAll().catch(() => undefined);
+        this.cameras.clear();
+        this.stations.clear();
+        this.deviceInfos.clear();
+        this.stationInfos.clear();
+        this.streamManager = undefined;
         await this.client?.disconnect().catch(() => undefined);
         this.client = undefined;
         await this.doConnect();
