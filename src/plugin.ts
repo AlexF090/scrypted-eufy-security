@@ -98,10 +98,11 @@ export class EufySecurityPlugin
   /** Returns the in-flight connect promise if one is already running; otherwise starts a new one. */
   private connect(): Promise<void> {
     if (this.connectInFlight) return this.connectInFlight;
-    this.connectInFlight = this.doConnect().finally(() => {
-      this.connectInFlight = undefined;
+    const promise = this.doConnect().finally(() => {
+      if (this.connectInFlight === promise) this.connectInFlight = undefined;
     });
-    return this.connectInFlight;
+    this.connectInFlight = promise;
+    return promise;
   }
 
   /** Connect (or reconnect) the Eufy client and wire up events. */
@@ -278,8 +279,8 @@ export class EufySecurityPlugin
     //
     //  1. Startup race: connectInFlight running, deviceInfos not yet populated
     //     (i.e. nativeId absent from both maps).  The Map-check lets re-entrant
-    //     calls from onDeviceDiscovered → getDevice skip the await, because
-    //     discoverDevices() populates the maps *before* calling onDeviceDiscovered.
+    //     calls from onDevicesChanged → getDevice skip the await, because
+    //     discoverDevices() populates the maps *before* calling onDevicesChanged.
     //
     //  2. Reconnect race: a credential change tears down the old client
     //     (client = undefined) before doConnect creates the new one.
@@ -417,7 +418,8 @@ export class EufySecurityPlugin
       // await) so that concurrent getDevice() calls can find and wait on it
       // even if they arrive before our first suspension point.
       const priorInFlight = this.connectInFlight;
-      this.connectInFlight = (async () => {
+      let newInFlight: Promise<void>;
+      newInFlight = (async () => {
         await priorInFlight?.catch(() => undefined);
         await this.client?.disconnect().catch(() => undefined);
         this.client = undefined;
@@ -425,8 +427,9 @@ export class EufySecurityPlugin
       })()
         .catch((err) => this.logger.error("connect after setting failed", err))
         .finally(() => {
-          this.connectInFlight = undefined;
+          if (this.connectInFlight === newInFlight) this.connectInFlight = undefined;
         });
+      this.connectInFlight = newInFlight;
       await this.connectInFlight;
     }
     await this.onDeviceEvent(ScryptedInterface.Settings, undefined);
