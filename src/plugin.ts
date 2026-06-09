@@ -275,17 +275,25 @@ export class EufySecurityPlugin
       return this.stations.get(nativeId) as unknown as ScryptedDevice;
     }
 
-    // Wait for the initial connect + discoverDevices to complete before
-    // looking up device infos. The Map-check prevents a deadlock:
-    // discoverDevices() sets deviceInfos *before* calling onDeviceDiscovered,
-    // so a re-entrant getDevice() call will already find the device and skip
-    // the await. External calls during startup (known devices from a prior
-    // session) don't have the entry yet and correctly wait here.
+    // Wait for an in-flight connect to finish before trying to construct the
+    // device. Two cases require the wait:
+    //
+    //  1. Startup race: connectInFlight running, deviceInfos not yet populated
+    //     (i.e. nativeId absent from both maps).  The Map-check lets re-entrant
+    //     calls from onDeviceDiscovered → getDevice skip the await, because
+    //     discoverDevices() populates the maps *before* calling onDeviceDiscovered.
+    //
+    //  2. Reconnect race: a credential change tears down the old client
+    //     (client = undefined) before doConnect creates the new one.
+    //     deviceInfos may still hold stale entries from the previous session,
+    //     so the Map-check alone is not enough — also gate on client readiness.
     if (
       this.connectInFlight &&
-      !this.discoveryDone &&
-      !this.deviceInfos.has(nativeId) &&
-      !this.stationInfos.has(nativeId)
+      (!this.client ||
+        !this.streamManager ||
+        (!this.discoveryDone &&
+          !this.deviceInfos.has(nativeId) &&
+          !this.stationInfos.has(nativeId)))
     ) {
       await this.connectInFlight;
     }

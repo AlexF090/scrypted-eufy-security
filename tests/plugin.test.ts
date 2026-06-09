@@ -90,10 +90,17 @@ describe("EufySecurityPlugin discovery", () => {
 });
 
 describe("EufySecurityPlugin startup race", () => {
-  it("getDevice wartet auf discoverDevices auch wenn client bereits gesetzt", async () => {
+  it("getDevice waits for discoverDevices even when client is already set", async () => {
     let resolveDiscover!: () => void;
     const discoverBlocker = new Promise<void>((res) => {
       resolveDiscover = res;
+    });
+
+    // Resolved once getStations() is first called, meaning doConnect() has
+    // already set this.client and discoverDevices() has started.
+    let resolveDiscoveryStarted!: () => void;
+    const discoveryStarted = new Promise<void>((res) => {
+      resolveDiscoveryStarted = res;
     });
 
     fakeClient = new FakeClient([], [station]);
@@ -102,6 +109,7 @@ describe("EufySecurityPlugin startup race", () => {
       return [baseDevice({})];
     });
     fakeClient.getStations = jest.fn(async () => {
+      resolveDiscoveryStarted();
       await discoverBlocker;
       return [station];
     });
@@ -111,13 +119,16 @@ describe("EufySecurityPlugin startup race", () => {
     plugin.storage.setItem("password", "pw");
     plugin.storage.setItem("eventDuration", "2");
 
-    // Start connect, aber kein await — connect läuft jetzt asynchron.
+    // Start connect without awaiting — connect runs asynchronously.
     const connectResult = plugin.putSetting("password", "pw");
 
-    // getDevice im Race-Fenster aufrufen (discoverDevices blockiert noch).
+    // Wait until discoverDevices has started so this.client is definitely set.
+    await discoveryStarted;
+
+    // Call getDevice in the race window (discoverDevices still blocked).
     const devicePromise = plugin.getDevice("CAM1");
 
-    // discoverDevices freigeben.
+    // Unblock discoverDevices.
     resolveDiscover();
 
     await connectResult;

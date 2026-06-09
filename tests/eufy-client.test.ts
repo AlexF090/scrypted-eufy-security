@@ -148,7 +148,7 @@ describe("DirectEufyClient", () => {
 });
 
 describe("DirectEufyClient error event handling", () => {
-  it("emittiert disconnected ohne throw wenn inner client error emittiert", async () => {
+  it("emits disconnected without throwing when inner client emits error", async () => {
     const fake = new FakeEufySecurity();
     FakeEufySecurity.initialize.mockImplementation(async () => fake);
 
