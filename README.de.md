@@ -19,7 +19,7 @@ Google Home und Home Assistant bridgen.
 - ✅ PTZ Pan/Tilt für Indoor Cam C210
 - ✅ Guard Mode (Weg / Zuhause / Aus)
 - ✅ Automatischer Reconnect mit exponentiellem Backoff
-- ✅ Node.js 18+ kompatibel (via `enableEmbeddedPKCS1Support`)
+- ✅ Node.js 20+ kompatibel (via `enableEmbeddedPKCS1Support`)
 - ✅ Fallback auf Legacy-Crypto Child-Process bei Bedarf
 - ⚠️ HomeBase 3: max. 1 Stream gleichzeitig (Hardware-Limitierung)
 
@@ -49,9 +49,9 @@ Gib deine Zugangsdaten in den Settings ein → Geräte werden automatisch erkann
   umgeht dies durch direktes P2P.
 - **Stream-Start** dauert 3–10 Sekunden (P2P-Verbindungsaufbau zur HomeBase).
 
-## Crypto-Kompatibilität (Node.js 18+)
+## Crypto-Kompatibilität (Node.js 20+)
 
-Eufy-Geräte verwenden `RSA_PKCS1_PADDING` im P2P-Protokoll, das Node.js 18+ standardmäßig
+Eufy-Geräte verwenden `RSA_PKCS1_PADDING` im P2P-Protokoll, das Node.js 20+ standardmäßig
 ablehnt (CVE-2023-46809). Das Plugin handhabt dies in zwei Stufen:
 
 1. **Primär:** `EufySecurity.initialize({ enableEmbeddedPKCS1Support: true })` —

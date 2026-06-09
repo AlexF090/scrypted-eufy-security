@@ -19,7 +19,7 @@ HomeKit (including HomeKit Secure Video), Google Home and Home Assistant.
 - ✅ PTZ pan/tilt for the Indoor Cam C210
 - ✅ Guard Mode (Away / Home / Off)
 - ✅ Automatic reconnect with exponential backoff
-- ✅ Node.js 18+ compatible (via `enableEmbeddedPKCS1Support`)
+- ✅ Node.js 20+ compatible (via `enableEmbeddedPKCS1Support`)
 - ✅ Falls back to a legacy-crypto child process when needed
 - ⚠️ HomeBase 3: max. 1 stream at a time (hardware limitation)
 
@@ -49,9 +49,9 @@ Enter your credentials in Settings → devices are discovered automatically.
   firmware — the plugin works around it by using P2P directly.
 - **Stream start** takes 3–10 seconds (P2P connection setup to the HomeBase).
 
-## Crypto Compatibility (Node.js 18+)
+## Crypto Compatibility (Node.js 20+)
 
-Eufy devices use `RSA_PKCS1_PADDING` in the P2P protocol, which Node.js 18+
+Eufy devices use `RSA_PKCS1_PADDING` in the P2P protocol, which Node.js 20+
 rejects by default (CVE-2023-46809). The plugin handles this in two stages:
 
 1. **Primary:** `EufySecurity.initialize({ enableEmbeddedPKCS1Support: true })` —
