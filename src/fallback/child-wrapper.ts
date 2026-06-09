@@ -9,18 +9,18 @@
  * Raw video/audio frames are forwarded as base64-chunked IPC events because the
  * IPC channel cannot carry live `Readable` streams.
  */
-import { EventEmitter } from "events";
-import type { Readable } from "stream";
 import {
   EufySecurity,
-  type EufySecurityConfig,
-  type Station,
   type Device,
-  type TalkbackStream,
+  type EufySecurityConfig,
   type StreamMetadata as EufyStreamMetadata,
+  type Station,
+  type TalkbackStream,
 } from "eufy-security-client";
-import type { ChildConfig, ChildMessage, ParentMessage } from "./ipc-protocol";
+import type { EventEmitter } from "events";
+import type { Readable } from "stream";
 import type { DeviceInfo, StationInfo, StreamMetadata } from "../types";
+import type { ChildConfig, ChildMessage, ParentMessage } from "./ipc-protocol";
 
 /** Send a typed message to the parent, no-op if the channel is gone. */
 function send(message: ChildMessage): void {

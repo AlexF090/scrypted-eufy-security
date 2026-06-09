@@ -61,7 +61,7 @@ export class EufySecurityPlugin
     // Scrypted calls getDevice for previously-known child devices before the
     // async connect() has had a chance to populate deviceInfos.
     if (this.storage.getItem("username") && this.storage.getItem("password")) {
-      this.connectInFlight = this.connect().catch((err) => {
+      void this.connect().catch((err) => {
         this.logger.error("initial connect failed", err);
       });
     }
