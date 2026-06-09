@@ -51,8 +51,17 @@ function hostStreamOnTcp(
         reject(new Error("failed to bind TCP server"));
       }
     });
-    // Auto-close when the source stream ends.
-    stream.on("close", () => server.close());
+    // Close on end, close, or error — PassThrough emits "end" without "close".
+    const closeServer = (): void => {
+      try {
+        server.close();
+      } catch {
+        // server may already be closed
+      }
+    };
+    stream.once("end", closeServer);
+    stream.once("close", closeServer);
+    stream.once("error", closeServer);
   });
 }
 

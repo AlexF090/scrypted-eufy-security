@@ -122,7 +122,11 @@ class ChildWrapper {
     client.on("close", () => send({ type: "event:disconnected" }));
     (client as unknown as EventEmitter).on("error", (err: Error) => {
       console.warn("[EufyChild] eufy-security-client error:", err?.message ?? err);
-      send({ type: "event:disconnected" });
+      try {
+        send({ type: "event:disconnected" });
+      } catch {
+        // IPC channel may already be closed
+      }
     });
 
     client.on("tfa request", () => send({ type: "tfa_request" }));
@@ -204,9 +208,13 @@ class ChildWrapper {
     emit: (chunkB64: string) => void,
   ): void {
     stream.on("data", (chunk: Buffer) => emit(chunk.toString("base64")));
-    stream.on("error", (err: Error) =>
-      send({ type: "event:livestreamError", deviceSerial, message: err.message }),
-    );
+    stream.on("error", (err: Error) => {
+      try {
+        send({ type: "event:livestreamError", deviceSerial, message: err.message });
+      } catch {
+        // IPC channel may already be closed
+      }
+    });
   }
 
   private require(): EufySecurity {
