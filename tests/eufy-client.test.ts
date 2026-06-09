@@ -60,9 +60,9 @@ jest.mock("child_process", () => ({
 }));
 
 import {
+  ChildProcessEufyClient,
   createEufyClient,
   DirectEufyClient,
-  ChildProcessEufyClient,
 } from "../src/eufy-client";
 import { EufyCryptoError, type EufyPluginConfig } from "../src/types";
 import { isCryptoPaddingError } from "../src/utils";
