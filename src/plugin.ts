@@ -127,7 +127,12 @@ export class EufySecurityPlugin
     this.captchaId = undefined;
     this.captchaImageB64 = undefined;
 
-    await this.discoverDevices();
+    this.discovering = true;
+    try {
+      await this.discoverDevices();
+    } finally {
+      this.discovering = false;
+    }
     this.discoveryDone = true;
   }
 
