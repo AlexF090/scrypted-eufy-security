@@ -153,6 +153,7 @@ export class EufyCamera
     private readonly streamManager: StreamManager,
     private readonly deviceInfo: DeviceInfo,
     private readonly eventDurationSeconds: number,
+    private readonly isPrebufferCamera: () => boolean = () => false,
   ) {
     super(nativeId);
     this.logger = new Logger("Camera").child(deviceInfo.serial);
@@ -219,17 +220,20 @@ export class EufyCamera
   }
 
   /**
-   * Background prebuffer requests (destination "local-recorder" /
-   * "remote-recorder") must not pre-empt a running stream — they pass
-   * force=false and get StreamBusyError if the slot is taken.
-   * Interactive viewing requests (any other destination, including undefined)
-   * pass force=true and pre-empt immediately.
+   * The Rebroadcast plugin's prebuffer session calls getVideoStream() with no
+   * destination at all, and recorder requests use "local-recorder" /
+   * "remote-recorder" — both are background consumers that must not pre-empt
+   * a running stream (force=false, StreamBusyError if the slot is taken).
+   * Interactive viewers (WebRTC, HomeKit) always set an explicit destination
+   * such as "local" or "remote" — those pass force=true and pre-empt.
    */
   private isInteractiveDestination(
     destination?: MediaStreamDestination,
   ): boolean {
     return (
-      destination !== "local-recorder" && destination !== "remote-recorder"
+      destination !== undefined &&
+      destination !== "local-recorder" &&
+      destination !== "remote-recorder"
     );
   }
 
@@ -335,6 +339,10 @@ export class EufyCamera
       id: "p2p",
       name: "P2P Stream",
       prebuffer: 0,
+      // HomeBase 3 allows a single stream, so the Rebroadcast plugin must not
+      // auto-prebuffer every camera. source "cloud" disables its default
+      // prebuffer; only the user-selected prebuffer camera omits it.
+      ...(this.isPrebufferCamera() ? {} : { source: "cloud" as const }),
       video: {
         codec: /e330|professional|t8600/i.test(this.deviceInfo.model)
           ? "h265"

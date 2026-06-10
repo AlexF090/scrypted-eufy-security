@@ -4,7 +4,9 @@
  *
  * Responsibilities:
  *  - **HomeBase 3 single-stream limit**: only one physical stream may run at a
- *    time. A new request pre-empts the running one (with a short grace pause).
+ *    time. A forced (interactive) request pre-empts the running one (with a
+ *    short grace pause); a non-forced (prebuffer) request fails fast with
+ *    StreamBusyError while another camera holds the slot.
  *  - **Session reuse / reference counting**: multiple consumers (HomeKit + NVR)
  *    share one physical stream.
  *  - **Auto-cleanup**: a stream with zero consumers is stopped after a grace
@@ -32,10 +34,6 @@ export interface StreamManagerOptions {
   cleanupGraceMs: number;
   preemptPauseMs: number;
   maxRestarts: number;
-  /** Minimum time a physical stream must run before a non-forced request may
-   *  pre-empt it. Background (Rebroadcast prebuffer) requests respect this
-   *  limit; interactive (user-viewing) requests set force=true and bypass it. */
-  minStreamDurationMs: number;
 }
 
 const DEFAULTS: StreamManagerOptions = {
@@ -43,7 +41,6 @@ const DEFAULTS: StreamManagerOptions = {
   cleanupGraceMs: 30000,
   preemptPauseMs: 500,
   maxRestarts: 3,
-  minStreamDurationMs: 15000,
 };
 
 /** A handle handed to a single stream consumer. */
@@ -83,8 +80,6 @@ export class StreamManager extends EventEmitter {
   private readonly startWaiters = new Map<string, StartWaiter>();
   /** Serialises requestStream() so enforceSingleStream + start are atomic. */
   private requestLock: Promise<void> = Promise.resolve();
-  /** Timestamp of the last successful physical stream start (ms). */
-  private lastStreamStartTime?: number;
 
   private disconnected = false;
 
@@ -164,29 +159,20 @@ export class StreamManager extends EventEmitter {
    * {@link StreamSession}; the underlying physical stream is started on first
    * consumer and reused thereafter.
    *
-   * @param force When true, pre-empts any running stream immediately regardless
-   *   of {@link StreamManagerOptions.minStreamDurationMs}. Pass true for
-   *   interactive (user-viewing) requests; false (default) for background
-   *   prebuffer requests that should not disrupt an active stream.
+   * @param force When true, pre-empts any running stream of another camera.
+   *   Pass true for interactive (user-viewing) requests; false (default) for
+   *   background prebuffer requests, which never pre-empt and instead fail
+   *   fast with {@link StreamBusyError} while the slot is taken.
    */
   async requestStream(
     deviceSerial: string,
     force = false,
   ): Promise<StreamSession> {
-    // Fast-path cooldown check: if a *different* camera's stream just started
-    // and this is a non-forced (background) request, reject immediately without
-    // acquiring the mutex. This prevents the Rebroadcast plugin's startup burst
-    // from queuing all cameras and cycling endlessly through pre-emptions.
-    if (!force && !this.streams.has(deviceSerial)) {
-      const otherExists = [...this.streams.keys()].some(
-        (s) => s !== deviceSerial,
-      );
-      if (otherExists && this.lastStreamStartTime !== undefined) {
-        const elapsed = Date.now() - this.lastStreamStartTime;
-        if (elapsed < this.opts.minStreamDurationMs) {
-          throw new StreamBusyError(deviceSerial);
-        }
-      }
+    // Fast-path: a non-forced (background) request never pre-empts. Reject
+    // immediately without acquiring the mutex so the Rebroadcast plugin's
+    // startup burst cannot queue all cameras and cycle through pre-emptions.
+    if (!force && !this.streams.has(deviceSerial) && this.hasForeignStream(deviceSerial)) {
+      throw new StreamBusyError(deviceSerial);
     }
 
     // Serialise so enforceSingleStream + startPhysicalStream are atomic across
@@ -200,12 +186,20 @@ export class StreamManager extends EventEmitter {
 
     let physical: PhysicalStream;
     try {
-      physical =
-        this.streams.get(deviceSerial) ??
-        (await (async () => {
+      const existing = this.streams.get(deviceSerial);
+      if (existing) {
+        physical = existing;
+      } else {
+        // Re-check under the lock: a foreign stream may have started while
+        // this request was waiting on the mutex.
+        if (this.hasForeignStream(deviceSerial)) {
+          if (!force) {
+            throw new StreamBusyError(deviceSerial);
+          }
           await this.enforceSingleStream(deviceSerial);
-          return this.startPhysicalStream(deviceSerial);
-        })());
+        }
+        physical = await this.startPhysicalStream(deviceSerial);
+      }
     } finally {
       release();
     }
@@ -251,6 +245,11 @@ export class StreamManager extends EventEmitter {
       }, this.opts.cleanupGraceMs);
       physical.cleanupTimer.unref();
     }
+  }
+
+  /** True when a physical stream of a *different* camera is tracked. */
+  private hasForeignStream(deviceSerial: string): boolean {
+    return [...this.streams.keys()].some((s) => s !== deviceSerial);
   }
 
   /** Stop any other running stream to honour the single-stream limit. */
@@ -312,7 +311,6 @@ export class StreamManager extends EventEmitter {
         restarts: 0,
       };
       this.streams.set(deviceSerial, physical);
-      this.lastStreamStartTime = Date.now();
       this.log.info(`physical stream started for ${deviceSerial}`);
       return physical;
     } catch (err) {

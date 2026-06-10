@@ -32,7 +32,6 @@ function makeManager(
     cleanupGraceMs: 30000,
     preemptPauseMs: 10,
     maxRestarts: 3,
-    minStreamDurationMs: 0, // disabled by default so existing tests are unaffected
     ...opts,
   });
   return { client, manager };
@@ -64,10 +63,10 @@ describe("StreamManager", () => {
     }
   });
 
-  it("pre-empts the running stream for a different device (HomeBase 3 limit)", async () => {
+  it("pre-empts the running stream for a forced request of a different device (HomeBase 3 limit)", async () => {
     const { client, manager } = makeManager();
     await manager.requestStream("CAM1");
-    await manager.requestStream("CAM2");
+    await manager.requestStream("CAM2", true);
 
     expect(client.stopLivestream).toHaveBeenCalledWith("CAM1");
     expect(client.startLivestream).toHaveBeenCalledWith("CAM2");
@@ -105,67 +104,79 @@ describe("StreamManager", () => {
       cleanupGraceMs: 30000,
       preemptPauseMs: 10,
       maxRestarts: 3,
-      minStreamDurationMs: 0,
     });
     await expect(manager.requestStream("CAM1")).rejects.toThrow(
       /did not start/,
     );
   });
 
-  describe("minStreamDurationMs cooldown", () => {
-    it("throws StreamBusyError when a background request arrives within the cooldown", async () => {
-      const { manager } = makeManager({ minStreamDurationMs: 60000 });
-      // CAM1 starts → sets lastStreamStartTime
+  describe("force semantics (background vs interactive)", () => {
+    it("rejects a background request with StreamBusyError while another camera streams", async () => {
+      const { client, manager } = makeManager();
       await manager.requestStream("CAM1");
-      // CAM2 background request (force=false) → cooldown not expired → busy
+      client.startLivestream.mockClear();
+      client.stopLivestream.mockClear();
+
       await expect(manager.requestStream("CAM2", false)).rejects.toBeInstanceOf(
         StreamBusyError,
       );
+      // Fail-fast: no HomeBase traffic at all.
+      expect(client.startLivestream).not.toHaveBeenCalled();
+      expect(client.stopLivestream).not.toHaveBeenCalled();
     });
 
-    it("allows a forced (interactive) request to pre-empt within the cooldown", async () => {
-      const { client, manager } = makeManager({ minStreamDurationMs: 60000 });
+    it("keeps rejecting background requests no matter how long the other stream runs", async () => {
+      const { manager } = makeManager();
       await manager.requestStream("CAM1");
-      // force=true bypasses the cooldown
-      await manager.requestStream("CAM2", true);
-
-      expect(client.stopLivestream).toHaveBeenCalledWith("CAM1");
-      expect(client.startLivestream).toHaveBeenCalledWith("CAM2");
-    });
-
-    it("allows a background request once the cooldown has elapsed", async () => {
-      const { client, manager } = makeManager({ minStreamDurationMs: 20 });
-      await manager.requestStream("CAM1");
-
-      // Within cooldown → busy
-      await expect(manager.requestStream("CAM2", false)).rejects.toBeInstanceOf(
-        StreamBusyError,
-      );
-
-      // Wait for cooldown to expire (real timers, small value)
       await new Promise((r) => setTimeout(r, 30));
-
-      // Now the background request should succeed (pre-empts CAM1)
-      await manager.requestStream("CAM2", false);
-      expect(client.stopLivestream).toHaveBeenCalledWith("CAM1");
-      expect(client.startLivestream).toHaveBeenCalledWith("CAM2");
+      await expect(manager.requestStream("CAM2", false)).rejects.toBeInstanceOf(
+        StreamBusyError,
+      );
     });
 
-    it("does not apply the cooldown when no other stream is running", async () => {
-      const { client, manager } = makeManager({ minStreamDurationMs: 60000 });
-      // No stream running → background request should start immediately
+    it("starts a background request when no other stream is running", async () => {
+      const { client, manager } = makeManager();
       const session = await manager.requestStream("CAM1", false);
       expect(session.deviceSerial).toBe("CAM1");
       expect(client.startLivestream).toHaveBeenCalledWith("CAM1");
     });
 
-    it("does not apply the cooldown when requesting the same device that is already streaming", async () => {
-      const { client, manager } = makeManager({ minStreamDurationMs: 60000 });
+    it("reuses the existing stream for a background request of the same device", async () => {
+      const { client, manager } = makeManager();
       await manager.requestStream("CAM1");
-      // Second consumer for the same device → reuse, no cooldown check
       const b = await manager.requestStream("CAM1", false);
       expect(client.startLivestream).toHaveBeenCalledTimes(1);
       expect(b.deviceSerial).toBe("CAM1");
+    });
+
+    it("rejects a queued background request when a forced request wins the slot first (mutex re-check)", async () => {
+      const { client, manager } = makeManager();
+      // Defer the start event so both requests pass the fast-path check while
+      // the streams map is still empty.
+      client.startLivestream.mockImplementation(async (serial: string) => {
+        setImmediate(() => {
+          client.emit("livestreamStart", {
+            deviceSerial: serial,
+            metadata: {
+              videoCodec: "h264",
+              audioCodec: "aac",
+              videoFPS: 15,
+              videoWidth: 1920,
+              videoHeight: 1080,
+            },
+            videoStream: new PassThrough(),
+            audioStream: new PassThrough(),
+          });
+        });
+      });
+
+      const forced = manager.requestStream("CAM1", true);
+      const background = manager.requestStream("CAM2", false);
+
+      await expect(background).rejects.toBeInstanceOf(StreamBusyError);
+      const session = await forced;
+      expect(session.deviceSerial).toBe("CAM1");
+      expect(client.startLivestream).toHaveBeenCalledTimes(1);
     });
   });
 });

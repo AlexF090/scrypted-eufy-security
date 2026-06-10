@@ -331,6 +331,7 @@ export class EufySecurityPlugin
         this.streamManager,
         deviceInfo,
         config.eventDurationSeconds,
+        () => this.storage.getItem("prebufferSerial") === nativeId,
       );
       this.cameras.set(nativeId, camera);
       return camera as unknown as ScryptedDevice;
@@ -400,6 +401,7 @@ export class EufySecurityPlugin
         type: "string",
         value: "",
       },
+      this.buildPrebufferCameraSetting(),
     ];
 
     if (this.captchaImageB64) {
@@ -422,7 +424,38 @@ export class EufySecurityPlugin
     return settings;
   }
 
+  /**
+   * Dropdown selecting the single camera that keeps a permanent prebuffer
+   * stream (HomeBase 3 allows only one stream). All other cameras report
+   * source "cloud" so the Rebroadcast plugin does not auto-prebuffer them.
+   */
+  private buildPrebufferCameraSetting(): Setting {
+    const none = "Keine";
+    const choiceFor = (d: DeviceInfo): string => `${d.name} (${d.serial})`;
+    const current = this.deviceInfos.get(
+      this.storage.getItem("prebufferSerial") ?? "",
+    );
+    return {
+      key: "prebufferSerial",
+      title: "Prebuffer-Kamera",
+      description:
+        "Diese eine Kamera hält dauerhaft den Stream-Slot der HomeBase " +
+        "(schneller Live-View-Start, HKSV-Pre-Roll). Alle anderen Kameras " +
+        "streamen on demand. Nach Änderung das Rebroadcast-Plugin neu starten.",
+      choices: [none, ...[...this.deviceInfos.values()].map(choiceFor)],
+      value: current ? choiceFor(current) : none,
+    };
+  }
+
   async putSetting(key: string, value: SettingValue): Promise<void> {
+    if (key === "prebufferSerial") {
+      // The dropdown value is "name (serial)" — persist only the serial.
+      const match = /\(([^()]+)\)\s*$/.exec(String(value ?? ""));
+      this.storage.setItem(key, match?.[1] ?? "");
+      await this.onDeviceEvent(ScryptedInterface.Settings, undefined);
+      return;
+    }
+
     this.storage.setItem(key, String(value ?? ""));
 
     // Credential / auth changes trigger a (re)connect.

@@ -6,6 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0-rc.6] - 2026-06-11
+
+### Fixed
+
+- The rc.5 pre-emption fix never engaged: the Rebroadcast plugin's prebuffer
+  session calls `getVideoStream()` without a `destination`, which the
+  destination heuristic classified as interactive (`force=true`), so the
+  startup pre-emption loop continued unchanged. `undefined` destinations are
+  now treated as background requests.
+- `StreamManager.requestStream()` ignored the `force` flag once past the
+  fast-path check: after acquiring the mutex it always pre-empted the running
+  stream. Non-forced (background) requests now never pre-empt — they fail
+  fast with `StreamBusyError` while another camera holds the slot, both in
+  the fast path and re-checked under the mutex. The `minStreamDurationMs`
+  cooldown is gone.
+
+### Added
+
+- New plugin setting "Prebuffer-Kamera": selects the single camera that keeps
+  a permanent prebuffer stream (fast live-view start, HKSV pre-roll). All
+  other cameras report `source: "cloud"` in their media stream options so the
+  Rebroadcast plugin no longer auto-prebuffers them — with HomeBase 3's
+  one-stream limit, prebuffering every camera is physically impossible and
+  caused the endless pre-emption cycle. Default: no prebuffer camera.
+
 ## [1.0.0-beta.3] - 2026-06-04
 
 ### Fixed
