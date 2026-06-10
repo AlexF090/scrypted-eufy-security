@@ -150,7 +150,9 @@ export class EufyCamera
 
   // ---- VideoCamera -----------------------------------------------------------
 
-  async getVideoStream(options?: RequestMediaStreamOptions): Promise<MediaObject> {
+  async getVideoStream(
+    options?: RequestMediaStreamOptions,
+  ): Promise<MediaObject> {
     void options;
 
     // Serialise concurrent callers so only one TCP-server setup runs at a time.
@@ -177,10 +179,14 @@ export class EufyCamera
       this.activeTcpServers = [];
     }
 
-    const session = await this.streamManager.requestStream(this.deviceInfo.serial);
+    const session = await this.streamManager.requestStream(
+      this.deviceInfo.serial,
+    );
     this.activeSession = session;
 
-    const videoCodec = /hevc|h265/i.test(session.metadata.videoCodec) ? "hevc" : "h264";
+    const videoCodec = /hevc|h265/i.test(session.metadata.videoCodec)
+      ? "hevc"
+      : "h264";
 
     let videoResult: { port: number; server: net.Server };
     let audioResult: { port: number; server: net.Server };
@@ -223,14 +229,15 @@ export class EufyCamera
     return {
       id: "p2p",
       name: "P2P Stream",
+      prebuffer: 0,
       video: {
-        codec: /e330|professional|t8600/i.test(this.deviceInfo.model) ? "h265" : "h264",
+        codec: /e330|professional|t8600/i.test(this.deviceInfo.model)
+          ? "h265"
+          : "h264",
         width,
         height,
       },
-      audio: {
-        codec: "aac",
-      },
+      audio: {},
     };
   }
 
@@ -245,10 +252,11 @@ export class EufyCamera
       this.logger.debug("startIntercom on camera without intercom; ignored");
       return;
     }
-    const ffmpegInput = (await mediaManager.convertMediaObjectToJSON<FFmpegInput>(
-      media,
-      ScryptedMimeTypes.FFmpegInput,
-    )) as FFmpegInput;
+    const ffmpegInput =
+      (await mediaManager.convertMediaObjectToJSON<FFmpegInput>(
+        media,
+        ScryptedMimeTypes.FFmpegInput,
+      )) as FFmpegInput;
 
     const ffmpegPath = await mediaManager.getFFmpegPath();
     const inputArguments = ffmpegInput.inputArguments ?? [];
@@ -295,7 +303,10 @@ export class EufyCamera
     ];
   }
 
-  async putSetting(key: string, value: string | number | boolean): Promise<void> {
+  async putSetting(
+    key: string,
+    value: string | number | boolean,
+  ): Promise<void> {
     // Device-level toggles map straight onto Eufy properties.
     await this.client.setDeviceProperty(this.deviceInfo.serial, key, value);
   }
