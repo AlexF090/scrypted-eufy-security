@@ -19,6 +19,7 @@ import sdk, {
   type Settings,
   type VideoCamera,
 } from "@scrypted/sdk";
+import { spawn, type ChildProcess } from "child_process";
 import net from "net";
 import type { Readable } from "stream";
 import { PtzController, type PanTiltZoomCommand } from "./ptz";
@@ -72,6 +73,52 @@ function hostStreamOnTcp(
   });
 }
 
+/**
+ * Spawn an internal FFmpeg muxer that reads raw H.264/HEVC + AAC ADTS from two
+ * TCP sockets and outputs a single MPEG-TS stream on stdout.
+ *
+ * This is necessary because:
+ * - Scrypted's FFmpegInput has no outputArguments field, so we cannot add
+ *   -bsf:a aac_adtstoasc to the Rebroadcast Plugin's FFmpeg command directly.
+ * - Live TCP streams default to analyzeduration=0, causing FFmpeg to give up
+ *   before finding the H.264 SPS (which carries resolution information).
+ */
+function spawnMuxer(
+  ffmpegPath: string,
+  videoCodec: string,
+  videoPort: number,
+  audioPort: number,
+): ChildProcess {
+  return spawn(
+    ffmpegPath,
+    [
+      "-hide_banner",
+      "-loglevel",
+      "warning",
+      "-analyzeduration",
+      "10000000",
+      "-f",
+      videoCodec,
+      "-i",
+      `tcp://127.0.0.1:${videoPort}`,
+      "-f",
+      "aac",
+      "-i",
+      `tcp://127.0.0.1:${audioPort}`,
+      "-vcodec",
+      "copy",
+      "-acodec",
+      "copy",
+      "-bsf:a",
+      "aac_adtstoasc",
+      "-f",
+      "mpegts",
+      "pipe:1",
+    ],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+}
+
 /** Resolution hints by model family for {@link getVideoStreamOptions}. */
 function resolutionHint(model: string): { width: number; height: number } {
   // E330 / Professional → 4K, everything else → 1080p.
@@ -94,6 +141,7 @@ export class EufyCamera
   private motionTimer?: NodeJS.Timeout;
   private activeSession?: StreamSession;
   private activeTcpServers: net.Server[] = [];
+  private activeMuxProcess?: ChildProcess;
   /** Serialises concurrent getVideoStream() calls. */
   private streamRequestLock: Promise<void> = Promise.resolve();
 
@@ -175,6 +223,8 @@ export class EufyCamera
     if (this.activeSession) {
       await this.activeSession.release().catch(() => undefined);
       this.activeSession = undefined;
+      this.activeMuxProcess?.kill();
+      this.activeMuxProcess = undefined;
       for (const srv of this.activeTcpServers) safeClose(srv);
       this.activeTcpServers = [];
     }
@@ -204,20 +254,45 @@ export class EufyCamera
       throw err;
     }
 
-    this.activeTcpServers = [videoResult.server, audioResult.server];
+    const ffmpegPath = await mediaManager.getFFmpegPath();
+    const muxProcess = spawnMuxer(
+      ffmpegPath,
+      videoCodec,
+      videoResult.port,
+      audioResult.port,
+    );
+    this.activeMuxProcess = muxProcess;
+    muxProcess.stderr?.on("data", (chunk: Buffer) => {
+      this.logger.debug(`[muxer] ${chunk.toString().trim()}`);
+    });
+
+    let muxResult: { port: number; server: net.Server };
+    try {
+      muxResult = await hostStreamOnTcp(muxProcess.stdout!, this.logger);
+    } catch (err) {
+      muxProcess.kill();
+      this.activeMuxProcess = undefined;
+      safeClose(videoResult.server);
+      safeClose(audioResult.server);
+      await session.release().catch(() => undefined);
+      this.activeSession = undefined;
+      throw err;
+    }
+
+    this.activeTcpServers = [
+      videoResult.server,
+      audioResult.server,
+      muxResult.server,
+    ];
 
     const ffmpegInput: FFmpegInput = {
       url: undefined,
       mediaStreamOptions: this.buildStreamOptions(),
       inputArguments: [
         "-f",
-        videoCodec,
+        "mpegts",
         "-i",
-        `tcp://127.0.0.1:${videoResult.port}`,
-        "-f",
-        "aac",
-        "-i",
-        `tcp://127.0.0.1:${audioResult.port}`,
+        `tcp://127.0.0.1:${muxResult.port}`,
       ],
     };
 
@@ -319,6 +394,8 @@ export class EufyCamera
     await this.talkback.stop().catch(() => undefined);
     await this.activeSession?.release().catch(() => undefined);
     this.activeSession = undefined;
+    this.activeMuxProcess?.kill();
+    this.activeMuxProcess = undefined;
     for (const srv of this.activeTcpServers) safeClose(srv);
     this.activeTcpServers = [];
   }
