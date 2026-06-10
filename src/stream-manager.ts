@@ -324,7 +324,21 @@ export class StreamManager extends EventEmitter {
 
   /** Stop every physical stream (used on plugin shutdown). */
   async stopAll(): Promise<void> {
-    const serials = [...this.streams.keys()];
-    await Promise.all(serials.map((s) => this.stopPhysicalStream(s)));
+    let release!: () => void;
+    const prev = this.requestLock;
+    this.requestLock = new Promise<void>((res) => {
+      release = res;
+    });
+    await prev;
+    try {
+      // Mark as disconnected so any concurrent requestStream() call that is
+      // waiting on the lock fails fast instead of starting a new stream after
+      // we've finished stopping everything.
+      this.disconnected = true;
+      const serials = [...this.streams.keys()];
+      await Promise.all(serials.map((s) => this.stopPhysicalStream(s)));
+    } finally {
+      release();
+    }
   }
 }

@@ -47,6 +47,7 @@ export class EufySecurityPlugin
   private deviceInfos = new Map<string, DeviceInfo>();
   private stationInfos = new Map<string, StationInfo>();
   private discoveryDone = false;
+  private discovering = false;
   private connectInFlight: Promise<void> | undefined;
   private reconnecting = false;
   private reconnectAttempt = 0;
@@ -83,8 +84,9 @@ export class EufySecurityPlugin
       persistentDir,
       trustedDeviceName:
         this.storage.getItem("trustedDeviceName") ?? "scrypted-plugin",
-      eventDurationSeconds: Number(
-        this.storage.getItem("eventDuration") ?? "30",
+      eventDurationSeconds: Math.max(
+        1,
+        Number(this.storage.getItem("eventDuration")) || 30,
       ),
       p2pConnectionSetupTimeout: 120000,
       tfaCode: this.storage.getItem("tfa_code") || undefined,
@@ -150,16 +152,23 @@ export class EufySecurityPlugin
     });
     client.on("deviceAdded", (device: DeviceInfo) => {
       this.deviceInfos.set(device.serial, device);
-      void this.discoverDevices().catch((err) =>
-        this.logger.error("discoverDevices failed", err),
-      );
+      this.scheduleDiscovery();
     });
     client.on("stationAdded", (station: StationInfo) => {
       this.stationInfos.set(station.serial, station);
-      void this.discoverDevices().catch((err) =>
-        this.logger.error("discoverDevices failed", err),
-      );
+      this.scheduleDiscovery();
     });
+  }
+
+  /** Single-flight guard for discoverDevices() triggered by hot-plug events. */
+  private scheduleDiscovery(): void {
+    if (this.discovering) return;
+    this.discovering = true;
+    void this.discoverDevices()
+      .catch((err) => this.logger.error("discoverDevices failed", err))
+      .finally(() => {
+        this.discovering = false;
+      });
   }
 
   /**
