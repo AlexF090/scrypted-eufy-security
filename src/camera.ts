@@ -29,6 +29,14 @@ import { Logger, withTimeout } from "./utils";
 
 const { mediaManager } = sdk;
 
+function safeClose(server: net.Server): void {
+  try {
+    server.close();
+  } catch {
+    // already closed
+  }
+}
+
 /** Host a raw stream on an ephemeral localhost TCP port. */
 function hostStreamOnTcp(
   stream: Readable,
@@ -38,7 +46,6 @@ function hostStreamOnTcp(
     const server = net.createServer((socket) => {
       stream.pipe(socket);
       socket.on("error", () => undefined);
-      stream.on("end", () => socket.end());
     });
     server.on("error", reject);
     server.listen(0, "127.0.0.1", () => {
@@ -166,7 +173,7 @@ export class EufyCamera
     if (this.activeSession) {
       await this.activeSession.release().catch(() => undefined);
       this.activeSession = undefined;
-      for (const srv of this.activeTcpServers) srv.close();
+      for (const srv of this.activeTcpServers) safeClose(srv);
       this.activeTcpServers = [];
     }
 
@@ -182,7 +189,7 @@ export class EufyCamera
       try {
         audioResult = await hostStreamOnTcp(session.audioStream, this.logger);
       } catch (err) {
-        videoResult.server.close();
+        safeClose(videoResult.server);
         throw err;
       }
     } catch (err) {
@@ -301,7 +308,7 @@ export class EufyCamera
     await this.talkback.stop().catch(() => undefined);
     await this.activeSession?.release().catch(() => undefined);
     this.activeSession = undefined;
-    for (const srv of this.activeTcpServers) srv.close();
+    for (const srv of this.activeTcpServers) safeClose(srv);
     this.activeTcpServers = [];
   }
 }

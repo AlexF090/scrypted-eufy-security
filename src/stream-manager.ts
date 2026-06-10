@@ -226,32 +226,31 @@ export class StreamManager extends EventEmitter {
       this.startWaiters.set(deviceSerial, { resolve, reject });
     });
 
-    await this.client.startLivestream(deviceSerial);
-
-    let payload: LivestreamStartPayload;
     try {
-      payload = await withTimeout(
+      await this.client.startLivestream(deviceSerial);
+
+      const payload = await withTimeout(
         startPromise,
         this.opts.startTimeoutMs,
         () => new StreamTimeoutError(deviceSerial),
       );
+
+      const physical: PhysicalStream = {
+        deviceSerial,
+        videoStream: payload.videoStream,
+        audioStream: payload.audioStream,
+        metadata: payload.metadata,
+        consumers: new Set(),
+        restarts: 0,
+      };
+      this.streams.set(deviceSerial, physical);
+      this.log.info(`physical stream started for ${deviceSerial}`);
+      return physical;
     } catch (err) {
       this.startWaiters.delete(deviceSerial);
       await this.client.stopLivestream(deviceSerial).catch(() => undefined);
       throw err;
     }
-
-    const physical: PhysicalStream = {
-      deviceSerial,
-      videoStream: payload.videoStream,
-      audioStream: payload.audioStream,
-      metadata: payload.metadata,
-      consumers: new Set(),
-      restarts: 0,
-    };
-    this.streams.set(deviceSerial, physical);
-    this.log.info(`physical stream started for ${deviceSerial}`);
-    return physical;
   }
 
   /** Stop and forget a physical stream. */
