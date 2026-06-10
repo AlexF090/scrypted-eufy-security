@@ -59,6 +59,12 @@ export class PtzController {
         errors.push(err instanceof Error ? err : new Error(String(err)));
       }
     }
+    if (errors.length > 0 && errors.length < moves.length) {
+      this.log.warn(
+        `PTZ partial failure (${errors.length}/${moves.length} moves failed): ` +
+          errors.map((e) => e.message).join(", "),
+      );
+    }
     if (errors.length === moves.length) {
       throw errors[0];
     }

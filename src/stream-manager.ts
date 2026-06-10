@@ -78,6 +78,8 @@ export class StreamManager extends EventEmitter {
   /** Serialises requestStream() so enforceSingleStream + start are atomic. */
   private requestLock: Promise<void> = Promise.resolve();
 
+  private disconnected = false;
+
   private readonly onLivestreamStartBound = (p: LivestreamStartPayload): void =>
     this.onLivestreamStart(p);
   private readonly onLivestreamStopBound = (s: string): void =>
@@ -105,6 +107,7 @@ export class StreamManager extends EventEmitter {
   }
 
   private onDisconnected(): void {
+    this.disconnected = true;
     const err = new Error("client disconnected");
     for (const [serial, waiter] of this.startWaiters) {
       this.startWaiters.delete(serial);
@@ -225,6 +228,15 @@ export class StreamManager extends EventEmitter {
     const startPromise = new Promise<LivestreamStartPayload>((resolve, reject) => {
       this.startWaiters.set(deviceSerial, { resolve, reject });
     });
+
+    // Guard: onDisconnected() may have run before this call reached us (e.g. when
+    // restartStream() is scheduled but the disconnect event fires first). In that
+    // case the waiter above was never seen by onDisconnected() and would hang until
+    // the 20 s start-timeout. Fail fast instead.
+    if (this.disconnected) {
+      this.startWaiters.delete(deviceSerial);
+      throw new Error("client disconnected");
+    }
 
     try {
       await this.client.startLivestream(deviceSerial);
