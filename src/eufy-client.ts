@@ -427,10 +427,13 @@ export class ChildProcessEufyClient
       this.child.on("exit", (code) => this.onChildExit(code));
       this.child.on("error", (err) => {
         this.logger.error("child process error", err);
+        // Reject the ready-promise if we're still in spawnChild(), then run the
+        // same full cleanup as onChildExit() so pending IPC requests are
+        // rejected and consumers receive a 'disconnected' event.
         this.readyReject?.(err);
         this.readyResolve = undefined;
         this.readyReject = undefined;
-        this.child?.removeAllListeners();
+        this.onChildExit(null);
       });
     });
   }
