@@ -11,6 +11,7 @@ import sdk, {
   type FFmpegInput,
   type Intercom,
   type MediaObject,
+  type MediaStreamDestination,
   type MotionSensor,
   type PictureOptions,
   type RequestMediaStreamOptions,
@@ -26,6 +27,7 @@ import { PtzController, type PanTiltZoomCommand } from "./ptz";
 import type { StreamManager, StreamSession } from "./stream-manager";
 import { TalkbackController } from "./talkback";
 import type { DeviceInfo, IEufyClient } from "./types";
+import { StreamBusyError } from "./types";
 import { Logger, withTimeout } from "./utils";
 
 const { mediaManager } = sdk;
@@ -201,8 +203,6 @@ export class EufyCamera
   async getVideoStream(
     options?: RequestMediaStreamOptions,
   ): Promise<MediaObject> {
-    void options;
-
     // Serialise concurrent callers so only one TCP-server setup runs at a time.
     let release!: () => void;
     const prev = this.streamRequestLock;
@@ -212,13 +212,32 @@ export class EufyCamera
     await prev;
 
     try {
-      return await this.doGetVideoStream();
+      return await this.doGetVideoStream(options?.destination);
     } finally {
       release();
     }
   }
 
-  private async doGetVideoStream(): Promise<MediaObject> {
+  /**
+   * Background prebuffer requests (destination "local-recorder" /
+   * "remote-recorder") must not pre-empt a running stream — they pass
+   * force=false and get StreamBusyError if the slot is taken.
+   * Interactive viewing requests (any other destination, including undefined)
+   * pass force=true and pre-empt immediately.
+   */
+  private isInteractiveDestination(
+    destination?: MediaStreamDestination,
+  ): boolean {
+    return (
+      destination !== "local-recorder" && destination !== "remote-recorder"
+    );
+  }
+
+  private async doGetVideoStream(
+    destination?: MediaStreamDestination,
+  ): Promise<MediaObject> {
+    const force = this.isInteractiveDestination(destination);
+
     // Release any previous session so we don't accumulate TCP servers.
     if (this.activeSession) {
       await this.activeSession.release().catch(() => undefined);
@@ -229,9 +248,20 @@ export class EufyCamera
       this.activeTcpServers = [];
     }
 
-    const session = await this.streamManager.requestStream(
-      this.deviceInfo.serial,
-    );
+    let session;
+    try {
+      session = await this.streamManager.requestStream(
+        this.deviceInfo.serial,
+        force,
+      );
+    } catch (err) {
+      if (err instanceof StreamBusyError) {
+        this.logger.debug(
+          `stream slot busy for ${this.deviceInfo.serial}; Rebroadcast will retry`,
+        );
+      }
+      throw err;
+    }
     this.activeSession = session;
 
     const videoCodec = /hevc|h265/i.test(session.metadata.videoCodec)

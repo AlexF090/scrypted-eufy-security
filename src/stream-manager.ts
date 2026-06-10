@@ -17,6 +17,7 @@
 import { EventEmitter } from "events";
 import type { Readable } from "stream";
 import {
+  StreamBusyError,
   StreamInterruptedError,
   StreamTimeoutError,
   type IEufyClient,
@@ -31,6 +32,10 @@ export interface StreamManagerOptions {
   cleanupGraceMs: number;
   preemptPauseMs: number;
   maxRestarts: number;
+  /** Minimum time a physical stream must run before a non-forced request may
+   *  pre-empt it. Background (Rebroadcast prebuffer) requests respect this
+   *  limit; interactive (user-viewing) requests set force=true and bypass it. */
+  minStreamDurationMs: number;
 }
 
 const DEFAULTS: StreamManagerOptions = {
@@ -38,6 +43,7 @@ const DEFAULTS: StreamManagerOptions = {
   cleanupGraceMs: 30000,
   preemptPauseMs: 500,
   maxRestarts: 3,
+  minStreamDurationMs: 15000,
 };
 
 /** A handle handed to a single stream consumer. */
@@ -77,6 +83,8 @@ export class StreamManager extends EventEmitter {
   private readonly startWaiters = new Map<string, StartWaiter>();
   /** Serialises requestStream() so enforceSingleStream + start are atomic. */
   private requestLock: Promise<void> = Promise.resolve();
+  /** Timestamp of the last successful physical stream start (ms). */
+  private lastStreamStartTime?: number;
 
   private disconnected = false;
 
@@ -155,8 +163,32 @@ export class StreamManager extends EventEmitter {
    * Request a shared stream for `deviceSerial`. Returns a per-consumer
    * {@link StreamSession}; the underlying physical stream is started on first
    * consumer and reused thereafter.
+   *
+   * @param force When true, pre-empts any running stream immediately regardless
+   *   of {@link StreamManagerOptions.minStreamDurationMs}. Pass true for
+   *   interactive (user-viewing) requests; false (default) for background
+   *   prebuffer requests that should not disrupt an active stream.
    */
-  async requestStream(deviceSerial: string): Promise<StreamSession> {
+  async requestStream(
+    deviceSerial: string,
+    force = false,
+  ): Promise<StreamSession> {
+    // Fast-path cooldown check: if a *different* camera's stream just started
+    // and this is a non-forced (background) request, reject immediately without
+    // acquiring the mutex. This prevents the Rebroadcast plugin's startup burst
+    // from queuing all cameras and cycling endlessly through pre-emptions.
+    if (!force && !this.streams.has(deviceSerial)) {
+      const otherExists = [...this.streams.keys()].some(
+        (s) => s !== deviceSerial,
+      );
+      if (otherExists && this.lastStreamStartTime !== undefined) {
+        const elapsed = Date.now() - this.lastStreamStartTime;
+        if (elapsed < this.opts.minStreamDurationMs) {
+          throw new StreamBusyError(deviceSerial);
+        }
+      }
+    }
+
     // Serialise so enforceSingleStream + startPhysicalStream are atomic across
     // concurrent callers (e.g. HomeKit + NVR arriving at the same time).
     let release!: () => void;
@@ -280,6 +312,7 @@ export class StreamManager extends EventEmitter {
         restarts: 0,
       };
       this.streams.set(deviceSerial, physical);
+      this.lastStreamStartTime = Date.now();
       this.log.info(`physical stream started for ${deviceSerial}`);
       return physical;
     } catch (err) {

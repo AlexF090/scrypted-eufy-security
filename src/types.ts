@@ -190,3 +190,15 @@ export class StreamInterruptedError extends Error {
     this.name = "StreamInterruptedError";
   }
 }
+
+/**
+ * Thrown by requestStream() when a background (non-interactive) request arrives
+ * while another camera's stream just started and the minimum stream duration
+ * has not yet elapsed. The Rebroadcast plugin will retry after 5 s.
+ */
+export class StreamBusyError extends Error {
+  constructor(deviceSerial: string) {
+    super(`Stream slot busy; ${deviceSerial} must retry later`);
+    this.name = "StreamBusyError";
+  }
+}
