@@ -42,12 +42,31 @@ Enter your credentials in Settings → devices are discovered automatically.
 3. Scan the QR code in the Apple Home app.
 4. HKSV activates automatically if you have an iCloud plan (Home 50 GB+).
 
+## Streaming & Prebuffer (HomeBase 3)
+
+HomeBase 3 allows **only one active stream at a time**. The plugin therefore
+disables Scrypted's automatic prebuffering for all cameras by default —
+prebuffering every camera would require one permanent stream per camera, which
+the hardware cannot do (and previously caused an endless stream pre-emption
+loop on startup).
+
+- **Prebuffer camera** (plugin setting): pick the single camera that keeps a
+  permanent prebuffer stream. That camera gets an instant live view and HKSV
+  pre-roll footage. After changing the setting, restart the Rebroadcast
+  plugin so it re-evaluates its prebuffer defaults.
+- All other cameras stream **on demand**: opening their live view takes the
+  3–10 s P2P connection setup and temporarily pre-empts the prebuffer
+  camera's stream. The prebuffer camera reclaims the slot automatically once
+  the live view is closed.
+
 ## Known Limitations
 
 - **HomeBase 3:** only one camera can stream at a time (Eufy hardware limit).
 - **RTSP** direct access to HomeBase 3 has been broken since the March 2026
   firmware — the plugin works around it by using P2P directly.
 - **Stream start** takes 3–10 seconds (P2P connection setup to the HomeBase).
+- **HKSV pre-roll** is only available for the selected prebuffer camera;
+  recordings from other cameras start at the motion event.
 
 ## Crypto Compatibility (Node.js 20+)
 
