@@ -206,11 +206,14 @@ export class EufySecurityPlugin
     try {
       const wait = backoffDelay(this.reconnectAttempt);
       this.reconnectAttempt += 1;
-      this.logger.info(`reconnect attempt ${this.reconnectAttempt} in ${wait}ms`);
+      this.logger.info(
+        `reconnect attempt ${this.reconnectAttempt} in ${wait}ms`,
+      );
       await delay(wait);
       await this.streamManager?.stopAll().catch(() => undefined);
       if (this.client) {
         await this.client.reconnect();
+        this.streamManager?.reset();
       } else {
         await this.connect();
       }
@@ -439,7 +442,9 @@ export class EufySecurityPlugin
       const newInFlight = (async () => {
         await priorInFlight?.catch(() => undefined);
         await Promise.all(
-          [...this.cameras.values()].map((c) => c.cleanup().catch(() => undefined)),
+          [...this.cameras.values()].map((c) =>
+            c.cleanup().catch(() => undefined),
+          ),
         );
         await this.streamManager?.stopAll().catch(() => undefined);
         this.streamManager?.destroy();
@@ -455,7 +460,8 @@ export class EufySecurityPlugin
       })()
         .catch((err) => this.logger.error("connect after setting failed", err))
         .finally(() => {
-          if (this.connectInFlight === newInFlight) this.connectInFlight = undefined;
+          if (this.connectInFlight === newInFlight)
+            this.connectInFlight = undefined;
         });
       this.connectInFlight = newInFlight;
       await this.connectInFlight;

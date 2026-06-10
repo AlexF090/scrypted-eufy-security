@@ -106,6 +106,11 @@ export class StreamManager extends EventEmitter {
     this.client.removeListener("disconnected", this.onDisconnectedBound);
   }
 
+  /** Reset the disconnected flag after a successful client reconnect. */
+  reset(): void {
+    this.disconnected = false;
+  }
+
   private onDisconnected(): void {
     this.disconnected = true;
     const err = new Error("client disconnected");
@@ -137,7 +142,9 @@ export class StreamManager extends EventEmitter {
       return;
     }
     if (physical.consumers.size > 0) {
-      this.log.warn(`unexpected stop for ${deviceSerial} with active consumers; restarting`);
+      this.log.warn(
+        `unexpected stop for ${deviceSerial} with active consumers; restarting`,
+      );
       void this.restartStream(physical).catch((err) =>
         this.log.error("restartStream failed", err),
       );
@@ -161,10 +168,12 @@ export class StreamManager extends EventEmitter {
 
     let physical: PhysicalStream;
     try {
-      physical = this.streams.get(deviceSerial) ?? (await (async () => {
-        await this.enforceSingleStream(deviceSerial);
-        return this.startPhysicalStream(deviceSerial);
-      })());
+      physical =
+        this.streams.get(deviceSerial) ??
+        (await (async () => {
+          await this.enforceSingleStream(deviceSerial);
+          return this.startPhysicalStream(deviceSerial);
+        })());
     } finally {
       release();
     }
@@ -176,7 +185,9 @@ export class StreamManager extends EventEmitter {
 
     const consumerId = makeRequestId();
     physical.consumers.add(consumerId);
-    this.log.debug(`consumer ${consumerId} added to ${deviceSerial} (${physical.consumers.size})`);
+    this.log.debug(
+      `consumer ${consumerId} added to ${deviceSerial} (${physical.consumers.size})`,
+    );
 
     return {
       deviceSerial,
@@ -198,7 +209,9 @@ export class StreamManager extends EventEmitter {
       return;
     }
     physical.consumers.delete(consumerId);
-    this.log.debug(`consumer ${consumerId} left ${deviceSerial} (${physical.consumers.size})`);
+    this.log.debug(
+      `consumer ${consumerId} left ${deviceSerial} (${physical.consumers.size})`,
+    );
 
     if (physical.consumers.size === 0) {
       physical.cleanupTimer = setTimeout(() => {
@@ -214,9 +227,16 @@ export class StreamManager extends EventEmitter {
       if (serial === incomingSerial) {
         continue;
       }
-      this.log.warn(`pre-empting stream ${serial} for ${incomingSerial} (HomeBase 3 limit)`);
+      this.log.warn(
+        `pre-empting stream ${serial} for ${incomingSerial} (HomeBase 3 limit)`,
+      );
       for (const consumerId of physical.consumers) {
-        this.emit("interrupted", serial, consumerId, new StreamInterruptedError(serial));
+        this.emit(
+          "interrupted",
+          serial,
+          consumerId,
+          new StreamInterruptedError(serial),
+        );
       }
       await this.stopPhysicalStream(serial);
       await delay(this.opts.preemptPauseMs);
@@ -224,10 +244,14 @@ export class StreamManager extends EventEmitter {
   }
 
   /** Start a physical stream and wait for its `livestreamStart` event. */
-  private async startPhysicalStream(deviceSerial: string): Promise<PhysicalStream> {
-    const startPromise = new Promise<LivestreamStartPayload>((resolve, reject) => {
-      this.startWaiters.set(deviceSerial, { resolve, reject });
-    });
+  private async startPhysicalStream(
+    deviceSerial: string,
+  ): Promise<PhysicalStream> {
+    const startPromise = new Promise<LivestreamStartPayload>(
+      (resolve, reject) => {
+        this.startWaiters.set(deviceSerial, { resolve, reject });
+      },
+    );
 
     // Guard: onDisconnected() may have run before this call reached us (e.g. when
     // restartStream() is scheduled but the disconnect event fires first). In that
@@ -285,7 +309,9 @@ export class StreamManager extends EventEmitter {
   /** Attempt to restart a stream that dropped while consumers remain. */
   private async restartStream(physical: PhysicalStream): Promise<void> {
     if (physical.restarts >= this.opts.maxRestarts) {
-      this.log.error(`max restarts reached for ${physical.deviceSerial}; giving up`);
+      this.log.error(
+        `max restarts reached for ${physical.deviceSerial}; giving up`,
+      );
       for (const consumerId of physical.consumers) {
         this.emit(
           "interrupted",

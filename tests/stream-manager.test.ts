@@ -80,6 +80,18 @@ describe("StreamManager", () => {
     expect(client.startLivestream).toHaveBeenCalledTimes(2);
   });
 
+  it("allows new streams after reset() following stopAll()", async () => {
+    const { client, manager } = makeManager();
+    await manager.requestStream("CAM1");
+
+    await manager.stopAll();
+    await expect(manager.requestStream("CAM1")).rejects.toThrow(/disconnected/);
+
+    manager.reset();
+    const session = await manager.requestStream("CAM1");
+    expect(session.deviceSerial).toBe("CAM1");
+  });
+
   it("times out when the stream never starts", async () => {
     const client = new FakeClient();
     client.startLivestream = jest.fn(async (_serial: string) => undefined); // never emits start
