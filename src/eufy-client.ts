@@ -127,6 +127,20 @@ export class DirectEufyClient extends EventEmitter implements IEufyClient {
 
     client.on("connect", () => this.emit("connected"));
     client.on("close", () => this.emit("disconnected"));
+    // eufy-security-client's typed EventEmitter doesn't expose 'error' in its
+    // event map, so attach via the base EventEmitter to avoid the TS error.
+    // Without this listener Node.js turns unhandled 'error' events into
+    // thrown exceptions that crash the plugin process.
+    (client as unknown as import("events").EventEmitter).on(
+      "error",
+      (err: Error) => {
+        console.warn(
+          "[DirectEufyClient] eufy-security-client error:",
+          err?.message ?? err,
+        );
+        this.emit("disconnected");
+      },
+    );
     client.on("tfa request", () => this.emit("tfaRequest"));
     client.on("captcha request", (id: string, captcha: string) =>
       this.emit("captchaRequest", id, captcha),
@@ -149,6 +163,12 @@ export class DirectEufyClient extends EventEmitter implements IEufyClient {
         videoStream: Readable,
         audioStream: Readable,
       ) => {
+        videoStream.on("error", (err) =>
+          this.emit("livestreamError", device.getSerial(), err),
+        );
+        audioStream.on("error", (err) =>
+          this.emit("livestreamError", device.getSerial(), err),
+        );
         this.emit("livestreamStart", {
           deviceSerial: device.getSerial(),
           metadata: toStreamMetadata(metadata),
@@ -170,6 +190,15 @@ export class DirectEufyClient extends EventEmitter implements IEufyClient {
         device: Dev,
         talkbackStream: import("eufy-security-client").TalkbackStream,
       ) => {
+        (talkbackStream as unknown as import("events").EventEmitter).on(
+          "error",
+          (err: Error) =>
+            this.emit(
+              "livestreamError",
+              device.getSerial(),
+              err,
+            ),
+        );
         this.talkbackStreams.set(device.getSerial(), talkbackStream);
         this.emit("talkbackStart", device.getSerial());
       },
@@ -398,7 +427,13 @@ export class ChildProcessEufyClient
       this.child.on("exit", (code) => this.onChildExit(code));
       this.child.on("error", (err) => {
         this.logger.error("child process error", err);
+        // Reject the ready-promise if we're still in spawnChild(), then run the
+        // same full cleanup as onChildExit() so pending IPC requests are
+        // rejected and consumers receive a 'disconnected' event.
         this.readyReject?.(err);
+        this.readyResolve = undefined;
+        this.readyReject = undefined;
+        this.onChildExit(null);
       });
     });
   }
@@ -416,6 +451,9 @@ export class ChildProcessEufyClient
       pair.audio.destroy();
     }
     this.streams.clear();
+    // Remove all listeners from the dead child before clearing the reference so
+    // a subsequent spawnChild() does not accumulate handlers on stale objects.
+    this.child?.removeAllListeners();
     this.child = undefined;
     this.emit("disconnected");
   }
@@ -552,8 +590,17 @@ export class ChildProcessEufyClient
 
   async disconnect(): Promise<void> {
     if (this.child) {
+      const child = this.child;
       await this.request("disconnect", {}).catch(() => undefined);
-      this.child.kill();
+      child.kill();
+      // Wait up to 2 s for the child to actually exit before releasing the ref.
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 2000);
+        child.once("exit", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
       this.child = undefined;
     }
   }

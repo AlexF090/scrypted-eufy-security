@@ -60,9 +60,9 @@ jest.mock("child_process", () => ({
 }));
 
 import {
+  ChildProcessEufyClient,
   createEufyClient,
   DirectEufyClient,
-  ChildProcessEufyClient,
 } from "../src/eufy-client";
 import { EufyCryptoError, type EufyPluginConfig } from "../src/types";
 import { isCryptoPaddingError } from "../src/utils";
@@ -144,6 +144,28 @@ describe("DirectEufyClient", () => {
     fake.emit("device motion detected", { getSerial: () => "CAM1" }, true);
 
     expect(seen).toEqual([["CAM1", true]]);
+  });
+});
+
+describe("DirectEufyClient error event handling", () => {
+  it("emits disconnected without throwing when inner client emits error", async () => {
+    const fake = new FakeEufySecurity();
+    FakeEufySecurity.initialize.mockImplementation(async () => fake);
+
+    const client = new DirectEufyClient(config);
+    await client.connect();
+
+    const disconnectedEvents: unknown[] = [];
+    client.on("disconnected", () => disconnectedEvents.push(true));
+
+    expect(() => {
+      (fake as unknown as import("events").EventEmitter).emit(
+        "error",
+        new Error("internal eufy error"),
+      );
+    }).not.toThrow();
+
+    expect(disconnectedEvents).toHaveLength(1);
   });
 });
 

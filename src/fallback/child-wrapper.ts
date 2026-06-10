@@ -9,21 +9,26 @@
  * Raw video/audio frames are forwarded as base64-chunked IPC events because the
  * IPC channel cannot carry live `Readable` streams.
  */
-import type { Readable } from "stream";
 import {
   EufySecurity,
-  type EufySecurityConfig,
-  type Station,
   type Device,
-  type TalkbackStream,
+  type EufySecurityConfig,
   type StreamMetadata as EufyStreamMetadata,
+  type Station,
+  type TalkbackStream,
 } from "eufy-security-client";
-import type { ChildConfig, ChildMessage, ParentMessage } from "./ipc-protocol";
+import type { EventEmitter } from "events";
+import type { Readable } from "stream";
 import type { DeviceInfo, StationInfo, StreamMetadata } from "../types";
+import type { ChildConfig, ChildMessage, ParentMessage } from "./ipc-protocol";
 
-/** Send a typed message to the parent, no-op if the channel is gone. */
+/** Send a typed message to the parent. No-op if the IPC channel is closed. */
 function send(message: ChildMessage): void {
-  process.send?.(message);
+  try {
+    process.send?.(message);
+  } catch {
+    // IPC channel already closed — parent is gone, discard silently.
+  }
 }
 
 /** Reply to a request with a payload. */
@@ -119,6 +124,10 @@ class ChildWrapper {
   private registerEvents(client: EufySecurity): void {
     client.on("connect", () => send({ type: "event:connected" }));
     client.on("close", () => send({ type: "event:disconnected" }));
+    (client as unknown as EventEmitter).on("error", (err: Error) => {
+      console.warn("[EufyChild] eufy-security-client error:", err?.message ?? err);
+      send({ type: "event:disconnected" });
+    });
 
     client.on("tfa request", () => send({ type: "tfa_request" }));
     client.on("captcha request", (captchaId: string, captcha: string) =>
@@ -156,10 +165,10 @@ class ChildWrapper {
           deviceSerial,
           metadata: toStreamMetadata(metadata),
         });
-        this.pipeStream(videoStream, (chunkB64) =>
+        this.pipeStream(deviceSerial, videoStream, (chunkB64) =>
           send({ type: "event:livestreamVideoChunk", deviceSerial, chunkB64 }),
         );
-        this.pipeStream(audioStream, (chunkB64) =>
+        this.pipeStream(deviceSerial, audioStream, (chunkB64) =>
           send({ type: "event:livestreamAudioChunk", deviceSerial, chunkB64 }),
         );
       },
@@ -193,9 +202,15 @@ class ChildWrapper {
   }
 
   /** Forward a raw stream to the parent as base64 chunks. */
-  private pipeStream(stream: Readable, emit: (chunkB64: string) => void): void {
+  private pipeStream(
+    deviceSerial: string,
+    stream: Readable,
+    emit: (chunkB64: string) => void,
+  ): void {
     stream.on("data", (chunk: Buffer) => emit(chunk.toString("base64")));
-    stream.on("error", () => undefined);
+    stream.on("error", (err: Error) =>
+      send({ type: "event:livestreamError", deviceSerial, message: err.message }),
+    );
   }
 
   private require(): EufySecurity {
@@ -325,8 +340,15 @@ function main(): void {
   const wrapper = new ChildWrapper(config);
 
   process.on("message", (msg: ParentMessage) => {
-    wrapper.handle(msg).catch((err) => replyError(msg.requestId, err));
+    try {
+      wrapper.handle(msg).catch((err) => replyError(msg.requestId, err));
+    } catch (err) {
+      replyError(msg.requestId, err);
+    }
   });
+
+  // Exit cleanly when the parent closes the IPC channel.
+  process.on("disconnect", () => process.exit(0));
 
   wrapper.init().catch((err) => {
     replyError(undefined, err);

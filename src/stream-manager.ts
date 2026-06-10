@@ -61,6 +61,11 @@ interface PhysicalStream {
   restarts: number;
 }
 
+interface StartWaiter {
+  resolve: (payload: LivestreamStartPayload) => void;
+  reject: (err: Error) => void;
+}
+
 /**
  * Coordinates physical streams and consumer reference counts.
  */
@@ -68,8 +73,18 @@ export class StreamManager extends EventEmitter {
   private readonly log: Logger;
   private readonly opts: StreamManagerOptions;
   private readonly streams = new Map<string, PhysicalStream>();
-  /** Resolvers awaiting the next `livestreamStart` per device. */
-  private readonly startWaiters = new Map<string, (payload: LivestreamStartPayload) => void>();
+  /** Waiters for the next `livestreamStart` per device, with reject support. */
+  private readonly startWaiters = new Map<string, StartWaiter>();
+  /** Serialises requestStream() so enforceSingleStream + start are atomic. */
+  private requestLock: Promise<void> = Promise.resolve();
+
+  private disconnected = false;
+
+  private readonly onLivestreamStartBound = (p: LivestreamStartPayload): void =>
+    this.onLivestreamStart(p);
+  private readonly onLivestreamStopBound = (s: string): void =>
+    this.onLivestreamStop(s);
+  private readonly onDisconnectedBound = (): void => this.onDisconnected();
 
   constructor(
     private readonly client: IEufyClient,
@@ -79,19 +94,32 @@ export class StreamManager extends EventEmitter {
     this.log = new Logger("StreamManager");
     this.opts = { ...DEFAULTS, ...options };
 
-    this.client.on("livestreamStart", (payload: LivestreamStartPayload) =>
-      this.onLivestreamStart(payload),
-    );
-    this.client.on("livestreamStop", (deviceSerial: string) =>
-      this.onLivestreamStop(deviceSerial),
-    );
+    this.client.on("livestreamStart", this.onLivestreamStartBound);
+    this.client.on("livestreamStop", this.onLivestreamStopBound);
+    this.client.on("disconnected", this.onDisconnectedBound);
+  }
+
+  /** Remove client event listeners (call before discarding this instance). */
+  destroy(): void {
+    this.client.removeListener("livestreamStart", this.onLivestreamStartBound);
+    this.client.removeListener("livestreamStop", this.onLivestreamStopBound);
+    this.client.removeListener("disconnected", this.onDisconnectedBound);
+  }
+
+  private onDisconnected(): void {
+    this.disconnected = true;
+    const err = new Error("client disconnected");
+    for (const [serial, waiter] of this.startWaiters) {
+      this.startWaiters.delete(serial);
+      waiter.reject(err);
+    }
   }
 
   private onLivestreamStart(payload: LivestreamStartPayload): void {
     const waiter = this.startWaiters.get(payload.deviceSerial);
     if (waiter) {
       this.startWaiters.delete(payload.deviceSerial);
-      waiter(payload);
+      waiter.resolve(payload);
     } else {
       // Unsolicited (re)start: refresh the stored streams if we already track it.
       const existing = this.streams.get(payload.deviceSerial);
@@ -110,7 +138,9 @@ export class StreamManager extends EventEmitter {
     }
     if (physical.consumers.size > 0) {
       this.log.warn(`unexpected stop for ${deviceSerial} with active consumers; restarting`);
-      void this.restartStream(physical);
+      void this.restartStream(physical).catch((err) =>
+        this.log.error("restartStream failed", err),
+      );
     }
   }
 
@@ -120,11 +150,23 @@ export class StreamManager extends EventEmitter {
    * consumer and reused thereafter.
    */
   async requestStream(deviceSerial: string): Promise<StreamSession> {
-    let physical = this.streams.get(deviceSerial);
+    // Serialise so enforceSingleStream + startPhysicalStream are atomic across
+    // concurrent callers (e.g. HomeKit + NVR arriving at the same time).
+    let release!: () => void;
+    const prev = this.requestLock;
+    this.requestLock = new Promise<void>((res) => {
+      release = res;
+    });
+    await prev;
 
-    if (!physical) {
-      await this.enforceSingleStream(deviceSerial);
-      physical = await this.startPhysicalStream(deviceSerial);
+    let physical: PhysicalStream;
+    try {
+      physical = this.streams.get(deviceSerial) ?? (await (async () => {
+        await this.enforceSingleStream(deviceSerial);
+        return this.startPhysicalStream(deviceSerial);
+      })());
+    } finally {
+      release();
     }
 
     if (physical.cleanupTimer) {
@@ -162,7 +204,7 @@ export class StreamManager extends EventEmitter {
       physical.cleanupTimer = setTimeout(() => {
         void this.stopPhysicalStream(deviceSerial);
       }, this.opts.cleanupGraceMs);
-      physical.cleanupTimer.unref?.();
+      physical.cleanupTimer.unref();
     }
   }
 
@@ -183,36 +225,44 @@ export class StreamManager extends EventEmitter {
 
   /** Start a physical stream and wait for its `livestreamStart` event. */
   private async startPhysicalStream(deviceSerial: string): Promise<PhysicalStream> {
-    const startPromise = new Promise<LivestreamStartPayload>((resolve) => {
-      this.startWaiters.set(deviceSerial, resolve);
+    const startPromise = new Promise<LivestreamStartPayload>((resolve, reject) => {
+      this.startWaiters.set(deviceSerial, { resolve, reject });
     });
 
-    await this.client.startLivestream(deviceSerial);
+    // Guard: onDisconnected() may have run before this call reached us (e.g. when
+    // restartStream() is scheduled but the disconnect event fires first). In that
+    // case the waiter above was never seen by onDisconnected() and would hang until
+    // the 20 s start-timeout. Fail fast instead.
+    if (this.disconnected) {
+      this.startWaiters.delete(deviceSerial);
+      throw new Error("client disconnected");
+    }
 
-    let payload: LivestreamStartPayload;
     try {
-      payload = await withTimeout(
+      await this.client.startLivestream(deviceSerial);
+
+      const payload = await withTimeout(
         startPromise,
         this.opts.startTimeoutMs,
         () => new StreamTimeoutError(deviceSerial),
       );
+
+      const physical: PhysicalStream = {
+        deviceSerial,
+        videoStream: payload.videoStream,
+        audioStream: payload.audioStream,
+        metadata: payload.metadata,
+        consumers: new Set(),
+        restarts: 0,
+      };
+      this.streams.set(deviceSerial, physical);
+      this.log.info(`physical stream started for ${deviceSerial}`);
+      return physical;
     } catch (err) {
       this.startWaiters.delete(deviceSerial);
       await this.client.stopLivestream(deviceSerial).catch(() => undefined);
       throw err;
     }
-
-    const physical: PhysicalStream = {
-      deviceSerial,
-      videoStream: payload.videoStream,
-      audioStream: payload.audioStream,
-      metadata: payload.metadata,
-      consumers: new Set(),
-      restarts: 0,
-    };
-    this.streams.set(deviceSerial, physical);
-    this.log.info(`physical stream started for ${deviceSerial}`);
-    return physical;
   }
 
   /** Stop and forget a physical stream. */
@@ -266,13 +316,29 @@ export class StreamManager extends EventEmitter {
       physical.consumers = consumers;
       this.streams.set(physical.deviceSerial, physical);
       await delay(this.opts.preemptPauseMs);
-      void this.restartStream(physical);
+      void this.restartStream(physical).catch((err) =>
+        this.log.error("restartStream (retry) failed", err),
+      );
     }
   }
 
   /** Stop every physical stream (used on plugin shutdown). */
   async stopAll(): Promise<void> {
-    const serials = [...this.streams.keys()];
-    await Promise.all(serials.map((s) => this.stopPhysicalStream(s)));
+    let release!: () => void;
+    const prev = this.requestLock;
+    this.requestLock = new Promise<void>((res) => {
+      release = res;
+    });
+    await prev;
+    try {
+      // Mark as disconnected so any concurrent requestStream() call that is
+      // waiting on the lock fails fast instead of starting a new stream after
+      // we've finished stopping everything.
+      this.disconnected = true;
+      const serials = [...this.streams.keys()];
+      await Promise.all(serials.map((s) => this.stopPhysicalStream(s)));
+    } finally {
+      release();
+    }
   }
 }

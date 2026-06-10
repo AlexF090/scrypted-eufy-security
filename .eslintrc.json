@@ -22,5 +22,5 @@
       { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }
     ]
   },
-  "ignorePatterns": ["dist/", "node_modules/", "tests/", "*.js"]
+  "ignorePatterns": ["dist/", "node_modules/", "*.js"]
 }

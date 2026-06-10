@@ -921,3 +921,56 @@ Das Ergebnis gilt als fertig wenn:
 `tests/*.test.ts` → `README.md` → `CHANGELOG.md` →
 `.github/workflows/ci.yml` → `.github/workflows/release.yml` →
 `.gitignore` → `LICENSE`
+
+---
+
+## 14. Aktueller Codebase-Stand (Stand 2026-06-09)
+
+### Prod-Ready-Status: ✅ Alle Fixes committed
+
+Branch: `fix/startup-race-unknown-device`
+
+### Behobene Bug-Klassen
+
+**Resource-Leaks**
+- `camera.ts`: TCP-Server schließt bei `end`/`close`/`error`; `activeTcpServers[]` in `cleanup()` geschlossen
+- `eufy-client.ts`: `child.removeAllListeners()` in `onChildExit()` — verhindert Listener-Akkumulation bei Reconnects
+- `stream-manager.ts`: `destroy()` entfernt alle Client-Listener (gebundene Refs); in Plugin-Reconnect aufgerufen
+- `talkback.ts`: `removeAllListeners()` auf ffmpeg-Process vor kill in `stop()`
+
+**Race-Conditions**
+- `stream-manager.ts`: `requestStream()` mit Promise-Chain-Mutex (`requestLock`) serialisiert
+- `camera.ts`: `getVideoStream()` serialisiert via `streamRequestLock`
+- `talkback.ts`: `active = true` sofort nach Guard-Check, vor `await stop()` — verhindert doppelten Start
+- `talkback.ts`: `active = false` VOR `ffmpeg.kill()` (Exit-Handler-Re-entry verhindert); lokale `currentFfmpeg`-Ref für in-flight `transmitAudio()`
+
+**IPC-Safety (`src/fallback/child-wrapper.ts`)**
+- `send()` zentral in try/catch — einzige sichere Stelle für geschlossenen IPC-Kanal
+- `process.on("disconnect", () => process.exit(0))` — kein Zombie-Child wenn Parent stirbt
+- `process.on("message")` Callback in try/catch für synchrone Exceptions in `handle()`
+- `ChildProcessEufyClient.disconnect()` wartet bis zu 2 s auf Child-Exit nach `kill()`
+
+**Fehlerbehandlung**
+- Alle `void asyncFn()` in Event-Handlern haben `.catch()` (inkl. `discoverDevices`, `restartStream`)
+- `ptz.ts`: per-Move try/catch; wirft erst wenn ALLE Moves scheitern
+- `station.ts`: `updateState()` nur nach erfolgreichem `setGuardMode()`
+- `plugin.ts`: `reconnecting`-Flag in `finally` freigegeben
+
+**Reconnect-Flow (`src/plugin.ts`)**
+- cameras/stations/infos/streamManager vollständig geleert vor Neuverbindung
+- `client.removeAllListeners()` vor `client = undefined`
+
+### CI/CD
+
+- Node 20.x in CI-Matrix hinzugefügt (war nur 22/24)
+- Release-Workflow baut auf Node 20.x (Minimum-Version des Projekts)
+- Release: Tag-Version wird gegen `package.json` version validiert (verhindert falschen Publish)
+- `tests/` wird von ESLint erfasst (war irrtümlich excluded)
+
+### Kritische Invarianten (nicht brechen)
+
+1. `StreamManager.requestStream()` MUSS mutex-gesichert bleiben — HomeBase 3 erlaubt nur 1 Stream gleichzeitig
+2. `send()` in `child-wrapper.ts` MUSS in try/catch bleiben — IPC-Kanal kann jederzeit zu sein
+3. Reconnect in `putSetting()` muss ALLES aufräumen (cameras, stations, streamManager, client-Listener)
+4. `talkback.start()`: `active = true` SOFORT nach Guard-Check, VOR dem ersten `await` — Race-Schutz
+5. `eufy-security-ws` darf NIRGENDWO vorkommen — weder als Import noch als Dependency

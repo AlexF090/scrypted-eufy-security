@@ -51,41 +51,111 @@ async function bootPlugin(devices: DeviceInfo[]): Promise<EufySecurityPlugin> {
   return plugin;
 }
 
+/** Flatten all devices reported via onDevicesChanged across all calls. */
+function discoveredDevices(): Array<{ nativeId: string; interfaces: string[]; type: string }> {
+  return (sdk.deviceManager.onDevicesChanged as jest.Mock).mock.calls.flatMap(
+    (c) => (c[0] as { devices: unknown[] }).devices ?? [],
+  ) as Array<{ nativeId: string; interfaces: string[]; type: string }>;
+}
+
 describe("EufySecurityPlugin discovery", () => {
   it("registers camera interfaces for a plain camera", async () => {
     await bootPlugin([baseDevice({})]);
-    const calls = (sdk.deviceManager.onDeviceDiscovered as jest.Mock).mock.calls.map((c) => c[0]);
-    const cam = calls.find((d) => d.nativeId === "CAM1");
-    expect(cam.interfaces).toEqual(
+    const cam = discoveredDevices().find((d) => d.nativeId === "CAM1");
+    expect(cam?.interfaces).toEqual(
       expect.arrayContaining([
         ScryptedInterface.Camera,
         ScryptedInterface.VideoCamera,
         ScryptedInterface.MotionSensor,
       ]),
     );
-    expect(cam.interfaces).not.toContain(ScryptedInterface.Intercom);
-    expect(cam.interfaces).not.toContain(ScryptedInterface.PanTiltZoom);
+    expect(cam?.interfaces).not.toContain(ScryptedInterface.Intercom);
+    expect(cam?.interfaces).not.toContain(ScryptedInterface.PanTiltZoom);
   });
 
   it("adds the PanTiltZoom interface only for PT cameras", async () => {
     await bootPlugin([baseDevice({ hasPanAndTilt: true })]);
-    const calls = (sdk.deviceManager.onDeviceDiscovered as jest.Mock).mock.calls.map((c) => c[0]);
-    const cam = calls.find((d) => d.nativeId === "CAM1");
-    expect(cam.interfaces).toContain(ScryptedInterface.PanTiltZoom);
+    const cam = discoveredDevices().find((d) => d.nativeId === "CAM1");
+    expect(cam?.interfaces).toContain(ScryptedInterface.PanTiltZoom);
   });
 
   it("adds the Intercom interface only for intercom cameras", async () => {
     await bootPlugin([baseDevice({ hasIntercom: true })]);
-    const calls = (sdk.deviceManager.onDeviceDiscovered as jest.Mock).mock.calls.map((c) => c[0]);
-    const cam = calls.find((d) => d.nativeId === "CAM1");
-    expect(cam.interfaces).toContain(ScryptedInterface.Intercom);
+    const cam = discoveredDevices().find((d) => d.nativeId === "CAM1");
+    expect(cam?.interfaces).toContain(ScryptedInterface.Intercom);
   });
 
   it("registers the station as a security system", async () => {
     await bootPlugin([baseDevice({})]);
-    const calls = (sdk.deviceManager.onDeviceDiscovered as jest.Mock).mock.calls.map((c) => c[0]);
-    const hb = calls.find((d) => d.nativeId === "HB3");
-    expect(hb.interfaces).toEqual([ScryptedInterface.SecuritySystem]);
+    const hb = discoveredDevices().find((d) => d.nativeId === "HB3");
+    expect(hb?.interfaces).toEqual([ScryptedInterface.SecuritySystem]);
+  });
+
+  it("sends all devices in a single onDevicesChanged call", async () => {
+    await bootPlugin([baseDevice({})]);
+    const mock = sdk.deviceManager.onDevicesChanged as jest.Mock;
+    expect(mock).toHaveBeenCalledTimes(1);
+    const { devices } = mock.mock.calls[0][0] as { devices: { nativeId: string }[] };
+    expect(devices.map((d) => d.nativeId)).toEqual(
+      expect.arrayContaining(["CAM1", "HB3"]),
+    );
+  });
+
+  it("getVideoStreamOptions does not declare a container type", async () => {
+    const plugin = await bootPlugin([baseDevice({})]);
+    const camera = (await plugin.getDevice("CAM1")) as unknown as {
+      getVideoStreamOptions(): Promise<Array<{ container?: string }>>;
+    };
+    const [opts] = await camera.getVideoStreamOptions();
+    expect(opts.container).toBeUndefined();
+  });
+});
+
+describe("EufySecurityPlugin startup race", () => {
+  it("getDevice waits for discoverDevices even when client is already set", async () => {
+    let resolveDiscover!: () => void;
+    const discoverBlocker = new Promise<void>((res) => {
+      resolveDiscover = res;
+    });
+
+    // Resolved once getStations() is first called, meaning doConnect() has
+    // already set this.client and discoverDevices() has started.
+    let resolveDiscoveryStarted!: () => void;
+    const discoveryStarted = new Promise<void>((res) => {
+      resolveDiscoveryStarted = res;
+    });
+
+    fakeClient = new FakeClient([], [station]);
+    fakeClient.getDevices = jest.fn(async () => {
+      await discoverBlocker;
+      return [baseDevice({})];
+    });
+    fakeClient.getStations = jest.fn(async () => {
+      resolveDiscoveryStarted();
+      await discoverBlocker;
+      return [station];
+    });
+
+    const plugin = new EufySecurityPlugin("eufy");
+    plugin.storage.setItem("username", "u@example.com");
+    plugin.storage.setItem("password", "pw");
+    plugin.storage.setItem("eventDuration", "2");
+
+    // Start connect without awaiting — connect runs asynchronously.
+    const connectResult = plugin.putSetting("password", "pw");
+
+    // Wait until discoverDevices has started so this.client is definitely set.
+    await discoveryStarted;
+
+    // Call getDevice in the race window (discoverDevices still blocked).
+    const devicePromise = plugin.getDevice("CAM1");
+
+    // Unblock discoverDevices.
+    resolveDiscover();
+
+    await connectResult;
+    const device = await devicePromise;
+    expect(device).toBeDefined();
   });
 });
 

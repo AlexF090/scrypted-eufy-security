@@ -1,6 +1,6 @@
 {
   "name": "scrypted-eufy-security",
-  "version": "1.0.0-beta.4",
+  "version": "1.0.0-beta.5",
   "description": "Eufy Security plugin for Scrypted — direct eufy-security-client integration",
   "main": "dist/plugin.zip",
   "files": [
@@ -21,7 +21,9 @@
   "scrypted": {
     "name": "Eufy Security",
     "interfaces": [
-      "Settings"
+      "Settings",
+      "DeviceProvider",
+      "DeviceDiscovery"
     ],
     "deviceCreator": "EufySecurityPlugin"
   },
@@ -33,12 +35,21 @@
     "camera",
     "homebase"
   ],
+  "engines": {
+    "node": ">=20"
+  },
   "license": "Apache-2.0",
   "peerDependencies": {
     "@scrypted/sdk": "*"
   },
   "optionalDependencies": {
     "eufy-security-client": "^3.7.0"
+  },
+  "overrides": {
+    "image-type": "^6.1.0",
+    "file-type": "^21.3.4",
+    "@rollup/plugin-terser": "^1.0.0",
+    "serialize-javascript": "^7.0.5"
   },
   "devDependencies": {
     "@scrypted/sdk": "latest",
