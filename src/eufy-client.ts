@@ -57,6 +57,7 @@ export class DirectEufyClient extends EventEmitter implements IEufyClient {
     string,
     import("eufy-security-client").TalkbackStream
   >();
+  private readonly logger = new Logger("DirectEufyClient");
 
   constructor(private readonly config: EufyPluginConfig) {
     super();
@@ -163,12 +164,33 @@ export class DirectEufyClient extends EventEmitter implements IEufyClient {
         videoStream: Readable,
         audioStream: Readable,
       ) => {
-        videoStream.on("error", (err) =>
-          this.emit("livestreamError", device.getSerial(), err),
+        this.logger.info(
+          `station livestream start: ${device.getSerial()} metadata=${JSON.stringify(metadata)}`,
         );
-        audioStream.on("error", (err) =>
-          this.emit("livestreamError", device.getSerial(), err),
-        );
+        let videoBytes = 0;
+        let audioBytes = 0;
+        videoStream.on("data", (c: Buffer) => (videoBytes += c.length));
+        audioStream.on("data", (c: Buffer) => (audioBytes += c.length));
+        const logInterval = setInterval(() => {
+          this.logger.info(
+            `station livestream progress: ${device.getSerial()} video=${videoBytes}B audio=${audioBytes}B`,
+          );
+        }, 5000);
+        const clearProgress = (): void => clearInterval(logInterval);
+        videoStream.once("close", clearProgress);
+        videoStream.once("end", clearProgress);
+        videoStream.on("error", (err) => {
+          this.logger.error(
+            `videoStream error for ${device.getSerial()}: ${err.message}`,
+          );
+          this.emit("livestreamError", device.getSerial(), err);
+        });
+        audioStream.on("error", (err) => {
+          this.logger.error(
+            `audioStream error for ${device.getSerial()}: ${err.message}`,
+          );
+          this.emit("livestreamError", device.getSerial(), err);
+        });
         this.emit("livestreamStart", {
           deviceSerial: device.getSerial(),
           metadata: toStreamMetadata(metadata),
@@ -177,8 +199,31 @@ export class DirectEufyClient extends EventEmitter implements IEufyClient {
         });
       },
     );
-    client.on("station livestream stop", (_station: Stat, device: Dev) =>
-      this.emit("livestreamStop", device.getSerial()),
+    client.on("station livestream stop", (_station: Stat, device: Dev) => {
+      this.logger.info(`station livestream stop: ${device.getSerial()}`);
+      this.emit("livestreamStop", device.getSerial());
+    });
+    client.on("station connection error", (station: Stat, err: Error) => {
+      this.logger.error(
+        `station connection error: station=${station.getSerial()}: ${err?.message ?? err}`,
+      );
+    });
+    client.on(
+      "station command result",
+      (
+        station: Stat,
+        result: import("eufy-security-client").CommandResult,
+      ) => {
+        if (result.return_code !== 0) {
+          this.logger.warn(
+            `station command result (non-zero): station=${station.getSerial()} command_type=${result.command_type} return_code=${result.return_code}`,
+          );
+        } else {
+          this.logger.debug(
+            `station command result: station=${station.getSerial()} command_type=${result.command_type} return_code=0`,
+          );
+        }
+      },
     );
     client.on("station guard mode", (station: Stat, mode: number) =>
       this.emit("guardMode", station.getSerial(), mode),
@@ -244,10 +289,20 @@ export class DirectEufyClient extends EventEmitter implements IEufyClient {
   }
 
   async startLivestream(deviceSerial: string): Promise<void> {
-    await this.requireClient().startStationLivestream(deviceSerial);
+    this.logger.info(`startStationLivestream(${deviceSerial})`);
+    try {
+      await this.requireClient().startStationLivestream(deviceSerial);
+      this.logger.info(`startStationLivestream(${deviceSerial}) call returned`);
+    } catch (err) {
+      this.logger.error(
+        `startStationLivestream(${deviceSerial}) threw: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
+      );
+      throw err;
+    }
   }
 
   async stopLivestream(deviceSerial: string): Promise<void> {
+    this.logger.info(`stopStationLivestream(${deviceSerial})`);
     await this.requireClient().stopStationLivestream(deviceSerial);
   }
 

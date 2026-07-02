@@ -44,17 +44,33 @@ function safeClose(server: net.Server): void {
 function hostStreamOnTcp(
   stream: Readable,
   log: Logger,
+  label: string,
 ): Promise<{ port: number; server: net.Server }> {
   return new Promise((resolve, reject) => {
     const server = net.createServer((socket) => {
+      log.info(`[${label}] consumer connected from :${socket.remotePort}`);
+      let bytes = 0;
+      let firstChunk = true;
+      stream.on("data", (chunk: Buffer) => {
+        bytes += chunk.length;
+        if (firstChunk) {
+          firstChunk = false;
+          log.info(`[${label}] first chunk: ${chunk.length} bytes`);
+        }
+      });
       stream.pipe(socket);
-      socket.on("error", () => undefined);
+      socket.on("error", (err) =>
+        log.info(`[${label}] consumer socket error: ${err.message}`),
+      );
+      socket.on("close", () =>
+        log.info(`[${label}] consumer socket closed after ${bytes} bytes`),
+      );
     });
     server.on("error", reject);
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
       if (address && typeof address === "object") {
-        log.debug(`hosting stream on tcp ${address.port}`);
+        log.info(`[${label}] hosting on tcp://127.0.0.1:${address.port}`);
         resolve({ port: address.port, server });
       } else {
         server.close();
@@ -62,16 +78,17 @@ function hostStreamOnTcp(
       }
     });
     // Close on end, close, or error — PassThrough emits "end" without "close".
-    const closeServer = (): void => {
+    const closeServer = (reason: string) => (): void => {
+      log.info(`[${label}] source stream ${reason}`);
       try {
         server.close();
       } catch {
         // server may already be closed
       }
     };
-    stream.once("end", closeServer);
-    stream.once("close", closeServer);
-    stream.once("error", closeServer);
+    stream.once("end", closeServer("ended"));
+    stream.once("close", closeServer("closed"));
+    stream.once("error", closeServer("errored"));
   });
 }
 
@@ -207,6 +224,9 @@ export class EufyCamera
   async getVideoStream(
     options?: RequestMediaStreamOptions,
   ): Promise<MediaObject> {
+    this.logger.info(
+      `getVideoStream requested (destination=${options?.destination ?? "<none>"}, id=${options?.id ?? "<none>"})`,
+    );
     // Serialise concurrent callers so only one TCP-server setup runs at a time.
     let release!: () => void;
     const prev = this.streamRequestLock;
@@ -216,7 +236,14 @@ export class EufyCamera
     await prev;
 
     try {
-      return await this.doGetVideoStream(options?.destination);
+      const result = await this.doGetVideoStream(options?.destination);
+      this.logger.info("getVideoStream fulfilled");
+      return result;
+    } catch (err) {
+      this.logger.error(
+        `getVideoStream failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
+      );
+      throw err;
     } finally {
       release();
     }
@@ -244,9 +271,13 @@ export class EufyCamera
     destination?: MediaStreamDestination,
   ): Promise<MediaObject> {
     const force = this.isInteractiveDestination(destination);
+    this.logger.info(
+      `doGetVideoStream: destination=${destination ?? "<none>"} force=${force}`,
+    );
 
     // Release any previous session so we don't accumulate TCP servers.
     if (this.activeSession) {
+      this.logger.info("releasing previous stream session and TCP servers");
       await this.activeSession.release().catch(() => undefined);
       this.activeSession = undefined;
       this.activeMuxProcess?.kill();
@@ -263,13 +294,16 @@ export class EufyCamera
       );
     } catch (err) {
       if (err instanceof StreamBusyError) {
-        this.logger.debug(
+        this.logger.info(
           `stream slot busy for ${this.deviceInfo.serial}; Rebroadcast will retry`,
         );
       }
       throw err;
     }
     this.activeSession = session;
+    this.logger.info(
+      `stream session acquired: metadata=${JSON.stringify(session.metadata)}`,
+    );
 
     const videoCodec = /hevc|h265/i.test(session.metadata.videoCodec)
       ? "hevc"
@@ -278,9 +312,17 @@ export class EufyCamera
     let videoResult: { port: number; server: net.Server };
     let audioResult: { port: number; server: net.Server };
     try {
-      videoResult = await hostStreamOnTcp(session.videoStream, this.logger);
+      videoResult = await hostStreamOnTcp(
+        session.videoStream,
+        this.logger,
+        "video-in",
+      );
       try {
-        audioResult = await hostStreamOnTcp(session.audioStream, this.logger);
+        audioResult = await hostStreamOnTcp(
+          session.audioStream,
+          this.logger,
+          "audio-in",
+        );
       } catch (err) {
         safeClose(videoResult.server);
         throw err;
@@ -299,13 +341,26 @@ export class EufyCamera
       audioResult.port,
     );
     this.activeMuxProcess = muxProcess;
+    this.logger.info(
+      `muxer spawned: pid=${muxProcess.pid} ffmpeg=${ffmpegPath} videoCodec=${videoCodec} videoPort=${videoResult.port} audioPort=${audioResult.port}`,
+    );
     muxProcess.stderr?.on("data", (chunk: Buffer) => {
-      this.logger.debug(`[muxer] ${chunk.toString().trim()}`);
+      this.logger.info(`[muxer] ${chunk.toString().trim()}`);
+    });
+    muxProcess.on("exit", (code, signal) => {
+      this.logger.info(`[muxer] exited: code=${code} signal=${signal}`);
+    });
+    muxProcess.on("error", (err) => {
+      this.logger.error(`[muxer] spawn error: ${err.message}`);
     });
 
     let muxResult: { port: number; server: net.Server };
     try {
-      muxResult = await hostStreamOnTcp(muxProcess.stdout!, this.logger);
+      muxResult = await hostStreamOnTcp(
+        muxProcess.stdout!,
+        this.logger,
+        "mux-out",
+      );
     } catch (err) {
       muxProcess.kill();
       this.activeMuxProcess = undefined;
@@ -332,6 +387,9 @@ export class EufyCamera
         `tcp://127.0.0.1:${muxResult.port}`,
       ],
     };
+    this.logger.info(
+      `returning FFmpegInput: tcp://127.0.0.1:${muxResult.port} (mpegts)`,
+    );
 
     return mediaManager.createFFmpegMediaObject(ffmpegInput);
   }

@@ -168,6 +168,9 @@ export class StreamManager extends EventEmitter {
     deviceSerial: string,
     force = false,
   ): Promise<StreamSession> {
+    this.log.info(
+      `requestStream: ${deviceSerial} force=${force} tracked=[${[...this.streams.keys()].join(",")}]`,
+    );
     // Fast-path: a non-forced (background) request never pre-empts. Reject
     // immediately without acquiring the mutex so the Rebroadcast plugin's
     // startup burst cannot queue all cameras and cycle through pre-emptions.
@@ -294,7 +297,11 @@ export class StreamManager extends EventEmitter {
     }
 
     try {
+      this.log.info(`startLivestream(${deviceSerial}) → P2P request sent`);
       await this.client.startLivestream(deviceSerial);
+      this.log.info(
+        `startLivestream(${deviceSerial}) acknowledged; waiting up to ${this.opts.startTimeoutMs}ms for livestreamStart event`,
+      );
 
       const payload = await withTimeout(
         startPromise,

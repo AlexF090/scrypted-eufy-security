@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0-rc.8] - 2026-07-02
+
+### Added
+
+- Info-level diagnostic logging across the entire stream pipeline
+  (`getVideoStream` → `StreamManager.requestStream` → P2P
+  `startStationLivestream` → TCP relays for video/audio/mux → FFmpeg mux
+  process spawn/exit → returned `FFmpegInput`), visible at the default log
+  level without any config change, to pin down where a stream request stalls
+  or fails silently.
+- Handlers for `station connection error` and `station command result`
+  (logs non-zero return codes) — previously unobserved P2P-level failures
+  during livestream start now surface in the plugin console.
+
 ## [1.0.0-rc.7] - 2026-07-02
 
 ### Fixed
