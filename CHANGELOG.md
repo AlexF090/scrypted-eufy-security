@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0-rc.7] - 2026-07-02
+
+### Fixed
+
+- Internal FFmpeg muxer applied `-bsf:a aac_adtstoasc` before writing the
+  MPEG-TS output. That bitstream filter strips per-frame ADTS headers, which
+  MPEG-TS requires for AAC — the result was a corrupted audio stream that the
+  Rebroadcast Plugin's downstream FFmpeg process couldn't parse
+  (`More than one AAC RDB per ADTS frame`, `channel element X is not
+  allocated`, `Could not write header`), causing every livestream/prebuffer
+  session to fail with `ffmpeg exited`. AAC now stays ADTS-framed end to end.
+
 ## [1.0.0-rc.6] - 2026-06-11
 
 ### Fixed

@@ -80,10 +80,15 @@ function hostStreamOnTcp(
  * TCP sockets and outputs a single MPEG-TS stream on stdout.
  *
  * This is necessary because:
- * - Scrypted's FFmpegInput has no outputArguments field, so we cannot add
- *   -bsf:a aac_adtstoasc to the Rebroadcast Plugin's FFmpeg command directly.
  * - Live TCP streams default to analyzeduration=0, causing FFmpeg to give up
  *   before finding the H.264 SPS (which carries resolution information).
+ *
+ * AAC stays ADTS-framed end to end: MPEG-TS requires per-frame ADTS headers,
+ * unlike MP4/MOV containers which want the bare "ASC" bitstream. Running
+ * `aac_adtstoasc` here strips those headers before the mpegts muxer writes
+ * them, which corrupts every AAC frame downstream (Rebroadcast Plugin's
+ * FFmpeg then fails to parse the stream at all — no output arguments hook
+ * exists to fix this on the consumer side, so it must not be applied here).
  */
 function spawnMuxer(
   ffmpegPath: string,
@@ -111,8 +116,6 @@ function spawnMuxer(
       "copy",
       "-acodec",
       "copy",
-      "-bsf:a",
-      "aac_adtstoasc",
       "-f",
       "mpegts",
       "pipe:1",
