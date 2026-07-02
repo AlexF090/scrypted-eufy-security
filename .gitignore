@@ -8,3 +8,4 @@ coverage/
 .eufy-persistent/
 eufy-persistent/
 *.tsbuildinfo
+.tokensave
