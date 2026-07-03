@@ -377,12 +377,17 @@ function isDeviceOnline(
   }
 }
 
+// VideoCodec enum (eufy-security-client p2p/types.ts): UNKNOWN=-1, H264=0, H265=1
+function videoCodecName(codec: unknown): string {
+  return Number(codec) === 1 ? "h265" : "h264";
+}
+
 /** Convert the client's StreamMetadata into the plugin's serialisable shape. */
 function toStreamMetadata(
   metadata: import("eufy-security-client").StreamMetadata,
 ): StreamMetadata {
   return {
-    videoCodec: String(metadata.videoCodec ?? ""),
+    videoCodec: videoCodecName(metadata.videoCodec),
     audioCodec: String(metadata.audioCodec ?? ""),
     videoFPS: Number(metadata.videoFPS) || 0,
     videoWidth: Number(metadata.videoWidth) || 0,

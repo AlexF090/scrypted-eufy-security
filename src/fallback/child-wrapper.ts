@@ -80,9 +80,14 @@ function toDeviceInfo(device: Device): DeviceInfo {
   };
 }
 
+// VideoCodec enum (eufy-security-client p2p/types.ts): UNKNOWN=-1, H264=0, H265=1
+function videoCodecName(codec: unknown): string {
+  return Number(codec) === 1 ? "h265" : "h264";
+}
+
 function toStreamMetadata(metadata: EufyStreamMetadata): StreamMetadata {
   return {
-    videoCodec: String(metadata.videoCodec ?? ""),
+    videoCodec: videoCodecName(metadata.videoCodec),
     audioCodec: String(metadata.audioCodec ?? ""),
     videoFPS: numberOrZero(metadata.videoFPS),
     videoWidth: numberOrZero(metadata.videoWidth),

@@ -305,9 +305,8 @@ export class EufyCamera
       `stream session acquired: metadata=${JSON.stringify(session.metadata)}`,
     );
 
-    const videoCodec = /hevc|h265/i.test(session.metadata.videoCodec)
-      ? "hevc"
-      : "h264";
+    const videoCodec =
+      session.metadata.videoCodec === "h265" ? "hevc" : "h264";
 
     let videoResult: { port: number; server: net.Server };
     let audioResult: { port: number; server: net.Server };

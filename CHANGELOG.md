@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0-rc.9] - 2026-07-03
+
+### Fixed
+
+- Video codec detection always resolved to `"h264"`, regardless of the
+  camera's actual stream codec. `eufy-security-client` reports `videoCodec`
+  as a numeric enum (`H264 = 0`, `H265 = 1`), but the metadata conversion
+  (`toStreamMetadata()` in both `eufy-client.ts` and the child-process
+  fallback) stringified the raw number (`String(1)` → `"1"`) instead of
+  mapping it to a codec name. The internal FFmpeg muxer then always ran
+  with `-f h264`, so real H265 streams (e.g. the E330/T8600, which streams
+  HEVC) were parsed as H264, corrupting every frame from the first byte
+  (`data partitioning is not implemented`, `missing picture in access
+  unit`, `no frame!`) and producing no visible image. `videoCodec` is now
+  mapped to `"h264"`/`"h265"` at the source in both client paths.
+
 ## [1.0.0-rc.8] - 2026-07-02
 
 ### Added
