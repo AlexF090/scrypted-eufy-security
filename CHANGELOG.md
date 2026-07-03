@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0-rc.11] - 2026-07-03
+
+### Added
+
+- Optional raw HEVC diagnostic dump for `video-in` stream (`EUFY_DEBUG_DUMP_VIDEO=1`
+  env var). Writes the first 64 KB of the raw P2P video stream to
+  `/tmp/eufy-hevc-dump-<timestamp>.h265` before the muxer touches it, to
+  diagnose the `PPS id out of range` / `Error parsing NAL unit #0` ffmpeg
+  errors seen on real H265 streams (E330/T8600) after the rc.9 codec-mapping
+  fix exposed HEVC parsing for the first time. Diagnostic only, no effect on
+  the stream pipeline unless the env var is set.
+
 ## [1.0.0-rc.9] - 2026-07-03
 
 ### Fixed

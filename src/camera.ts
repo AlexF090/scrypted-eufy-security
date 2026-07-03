@@ -21,6 +21,7 @@ import sdk, {
   type VideoCamera,
 } from "@scrypted/sdk";
 import { spawn, type ChildProcess } from "child_process";
+import fs from "fs";
 import net from "net";
 import type { Readable } from "stream";
 import { PtzController, type PanTiltZoomCommand } from "./ptz";
@@ -51,11 +52,33 @@ function hostStreamOnTcp(
       log.info(`[${label}] consumer connected from :${socket.remotePort}`);
       let bytes = 0;
       let firstChunk = true;
+      const dumpLimit = 64 * 1024;
+      const shouldDump =
+        label === "video-in" && process.env.EUFY_DEBUG_DUMP_VIDEO === "1";
+      let dumpFile: fs.WriteStream | undefined;
+      let dumpBytes = 0;
+      if (shouldDump) {
+        const dumpPath = `/tmp/eufy-hevc-dump-${Date.now()}.h265`;
+        dumpFile = fs.createWriteStream(dumpPath);
+        log.info(`[${label}] debug dump enabled: ${dumpPath}`);
+      }
       stream.on("data", (chunk: Buffer) => {
         bytes += chunk.length;
         if (firstChunk) {
           firstChunk = false;
           log.info(`[${label}] first chunk: ${chunk.length} bytes`);
+        }
+        if (dumpFile && dumpBytes < dumpLimit) {
+          const remaining = dumpLimit - dumpBytes;
+          const slice =
+            chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
+          dumpFile.write(slice);
+          dumpBytes += slice.length;
+          if (dumpBytes >= dumpLimit) {
+            log.info(`[${label}] debug dump reached ${dumpBytes} bytes, closing`);
+            dumpFile.end();
+            dumpFile = undefined;
+          }
         }
       });
       stream.pipe(socket);
