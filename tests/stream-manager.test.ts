@@ -63,13 +63,23 @@ describe("StreamManager", () => {
     }
   });
 
-  it("pre-empts the running stream for a forced request of a different device (HomeBase 3 limit)", async () => {
+  it("pre-empts the running stream for a forced request of a different device on a single-stream station", async () => {
     const { client, manager } = makeManager();
     await manager.requestStream("CAM1");
     await manager.requestStream("CAM2", true);
 
     expect(client.stopLivestream).toHaveBeenCalledWith("CAM1");
     expect(client.startLivestream).toHaveBeenCalledWith("CAM2");
+  });
+
+  it("allows different cameras to stream together when the station has no single-stream limit", async () => {
+    const { client, manager } = makeManager({ maxConcurrentStreams: Infinity });
+    await manager.requestStream("CAM1", false);
+    await manager.requestStream("CAM2", false);
+
+    expect(client.startLivestream).toHaveBeenCalledWith("CAM1");
+    expect(client.startLivestream).toHaveBeenCalledWith("CAM2");
+    expect(client.stopLivestream).not.toHaveBeenCalled();
   });
 
   it("restarts the stream when it stops while a consumer is active", async () => {
@@ -120,9 +130,23 @@ describe("StreamManager", () => {
       await expect(manager.requestStream("CAM2", false)).rejects.toBeInstanceOf(
         StreamBusyError,
       );
-      // Fail-fast: no HomeBase traffic at all.
+      // Fail-fast: no station traffic at all.
       expect(client.startLivestream).not.toHaveBeenCalled();
       expect(client.stopLivestream).not.toHaveBeenCalled();
+    });
+
+    it("stops an idle grace-period stream before a background request of another camera", async () => {
+      const { client, manager } = makeManager();
+      const session = await manager.requestStream("CAM1");
+      await session.release();
+      client.startLivestream.mockClear();
+      client.stopLivestream.mockClear();
+
+      const next = await manager.requestStream("CAM2", false);
+
+      expect(next.deviceSerial).toBe("CAM2");
+      expect(client.stopLivestream).toHaveBeenCalledWith("CAM1");
+      expect(client.startLivestream).toHaveBeenCalledWith("CAM2");
     });
 
     it("keeps rejecting background requests no matter how long the other stream runs", async () => {

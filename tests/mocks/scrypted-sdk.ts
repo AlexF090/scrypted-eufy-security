@@ -69,6 +69,10 @@ export const deviceManager = {
 };
 
 export const mediaManager = {
+  createMediaObject: jest.fn(async (data: unknown, mimeType: string) => ({
+    data,
+    mimeType,
+  })),
   createMediaObjectFromUrl: jest.fn(async (url: string) => ({ url })),
   createFFmpegMediaObject: jest.fn(async (input: unknown) => ({ input })),
   convertMediaObjectToJSON: jest.fn(async () => ({ inputArguments: [] })),

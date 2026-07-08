@@ -3,10 +3,11 @@
  * {@link IEufyClient}.
  *
  * Responsibilities:
- *  - **HomeBase 3 single-stream limit**: only one physical stream may run at a
- *    time. A forced (interactive) request pre-empts the running one (with a
- *    short grace pause); a non-forced (prebuffer) request fails fast with
- *    StreamBusyError while another camera holds the slot.
+ *  - **HomeBase single-stream limit**: HomeBase 2/older and HomeBase 3 allow
+ *    only one physical camera stream at a time. A forced (interactive) request
+ *    pre-empts the running one (with a short grace pause); a non-forced
+ *    (prebuffer) request fails fast with StreamBusyError while another camera
+ *    holds the slot.
  *  - **Session reuse / reference counting**: multiple consumers (HomeKit + NVR)
  *    share one physical stream.
  *  - **Auto-cleanup**: a stream with zero consumers is stopped after a grace
@@ -17,7 +18,7 @@
  *    bounded number of restarts.
  */
 import { EventEmitter } from "events";
-import type { Readable } from "stream";
+import { PassThrough, type Readable } from "stream";
 import {
   StreamBusyError,
   StreamInterruptedError,
@@ -34,14 +35,31 @@ export interface StreamManagerOptions {
   cleanupGraceMs: number;
   preemptPauseMs: number;
   maxRestarts: number;
+  /** Maximum number of concurrent physical streams. 1 for single-stream HomeBases; Infinity for all others. */
+  maxConcurrentStreams: number;
 }
 
 const DEFAULTS: StreamManagerOptions = {
-  startTimeoutMs: 20000,
+  startTimeoutMs: 60000,
   cleanupGraceMs: 30000,
   preemptPauseMs: 500,
   maxRestarts: 3,
+  maxConcurrentStreams: 1,
 };
+
+/**
+ * Pipe a raw eufy Readable into a PassThrough buffer so that SPS/PPS NAL
+ * units emitted before FFmpeg connects to the TCP socket are not lost.
+ * eufy-security-client streams may already be in flowing mode when handed
+ * to us (internal listeners attached), so piping immediately is the only
+ * safe way to preserve the initial bitstream header.
+ */
+function bufferStream(source: Readable, highWaterMark: number): Readable {
+  const pt = new PassThrough({ highWaterMark });
+  source.pipe(pt);
+  source.on("error", (err) => pt.destroy(err));
+  return pt;
+}
 
 /** A handle handed to a single stream consumer. */
 export interface StreamSession {
@@ -124,17 +142,28 @@ export class StreamManager extends EventEmitter {
   }
 
   private onLivestreamStart(payload: LivestreamStartPayload): void {
+    // Wrap both streams synchronously here — still inside the event callback,
+    // before any async gap — so pipe() is established immediately. HomeBase
+    // cameras send SPS/PPS/VPS only once at stream start; if bufferStream is
+    // called after an await (e.g. after waiter.resolve resolves) those initial
+    // NAL units may already have been drained from the source PassThrough.
+    const buffered: LivestreamStartPayload = {
+      ...payload,
+      videoStream: bufferStream(payload.videoStream, 1024 * 1024),
+      audioStream: bufferStream(payload.audioStream, 256 * 1024),
+    };
+
     const waiter = this.startWaiters.get(payload.deviceSerial);
     if (waiter) {
       this.startWaiters.delete(payload.deviceSerial);
-      waiter.resolve(payload);
+      waiter.resolve(buffered);
     } else {
       // Unsolicited (re)start: refresh the stored streams if we already track it.
       const existing = this.streams.get(payload.deviceSerial);
       if (existing) {
-        existing.videoStream = payload.videoStream;
-        existing.audioStream = payload.audioStream;
-        existing.metadata = payload.metadata;
+        existing.videoStream = buffered.videoStream;
+        existing.audioStream = buffered.audioStream;
+        existing.metadata = buffered.metadata;
       }
     }
   }
@@ -169,12 +198,18 @@ export class StreamManager extends EventEmitter {
     force = false,
   ): Promise<StreamSession> {
     this.log.info(
-      `requestStream: ${deviceSerial} force=${force} tracked=[${[...this.streams.keys()].join(",")}]`,
+      `requestStream: ${deviceSerial} force=${force} tracked=[${this.describeStreams()}]`,
     );
     // Fast-path: a non-forced (background) request never pre-empts. Reject
     // immediately without acquiring the mutex so the Rebroadcast plugin's
     // startup burst cannot queue all cameras and cycle through pre-emptions.
-    if (!force && !this.streams.has(deviceSerial) && this.hasForeignStream(deviceSerial)) {
+    // Only applies when the station has a single-stream hardware limit.
+    if (
+      !force &&
+      !this.streams.has(deviceSerial) &&
+      this.hasActiveForeignStream(deviceSerial) &&
+      this.opts.maxConcurrentStreams <= 1
+    ) {
       throw new StreamBusyError(deviceSerial);
     }
 
@@ -187,45 +222,52 @@ export class StreamManager extends EventEmitter {
     });
     await prev;
 
-    let physical: PhysicalStream;
+    let session: StreamSession;
     try {
-      const existing = this.streams.get(deviceSerial);
-      if (existing) {
-        physical = existing;
-      } else {
+      let physical = this.streams.get(deviceSerial);
+      if (!physical) {
         // Re-check under the lock: a foreign stream may have started while
         // this request was waiting on the mutex.
-        if (this.hasForeignStream(deviceSerial)) {
-          if (!force) {
-            throw new StreamBusyError(deviceSerial);
+        if (
+          this.hasForeignStream(deviceSerial) &&
+          this.opts.maxConcurrentStreams <= 1
+        ) {
+          if (this.hasActiveForeignStream(deviceSerial)) {
+            if (!force) {
+              throw new StreamBusyError(deviceSerial);
+            }
+            await this.enforceSingleStream(deviceSerial);
+          } else {
+            await this.stopIdleForeignStreams(deviceSerial);
           }
-          await this.enforceSingleStream(deviceSerial);
         }
         physical = await this.startPhysicalStream(deviceSerial);
       }
+
+      if (physical.cleanupTimer) {
+        clearTimeout(physical.cleanupTimer);
+        physical.cleanupTimer = undefined;
+      }
+
+      const consumerId = makeRequestId();
+      physical.consumers.add(consumerId);
+      this.log.debug(
+        `consumer ${consumerId} added to ${deviceSerial} (${physical.consumers.size})`,
+      );
+
+      session = {
+        deviceSerial,
+        videoStream: physical.videoStream,
+        audioStream: physical.audioStream,
+        metadata: physical.metadata,
+        consumerId,
+        release: () => this.releaseStream(deviceSerial, consumerId),
+      };
     } finally {
       release();
     }
 
-    if (physical.cleanupTimer) {
-      clearTimeout(physical.cleanupTimer);
-      physical.cleanupTimer = undefined;
-    }
-
-    const consumerId = makeRequestId();
-    physical.consumers.add(consumerId);
-    this.log.debug(
-      `consumer ${consumerId} added to ${deviceSerial} (${physical.consumers.size})`,
-    );
-
-    return {
-      deviceSerial,
-      videoStream: physical.videoStream,
-      audioStream: physical.audioStream,
-      metadata: physical.metadata,
-      consumerId,
-      release: () => this.releaseStream(deviceSerial, consumerId),
-    };
+    return session;
   }
 
   /**
@@ -250,9 +292,40 @@ export class StreamManager extends EventEmitter {
     }
   }
 
+  private describeStreams(): string {
+    return [...this.streams.values()]
+      .map((s) => `${s.deviceSerial}:${s.consumers.size}`)
+      .join(",");
+  }
+
   /** True when a physical stream of a *different* camera is tracked. */
   private hasForeignStream(deviceSerial: string): boolean {
     return [...this.streams.keys()].some((s) => s !== deviceSerial);
+  }
+
+  /** True when another camera has at least one active consumer. */
+  private hasActiveForeignStream(deviceSerial: string): boolean {
+    return [...this.streams.values()].some(
+      (s) => s.deviceSerial !== deviceSerial && s.consumers.size > 0,
+    );
+  }
+
+  /** Stop zero-consumer streams that are only being held during cleanup grace. */
+  private async stopIdleForeignStreams(incomingSerial: string): Promise<void> {
+    let stopped = false;
+    for (const [serial, physical] of this.streams) {
+      if (serial === incomingSerial || physical.consumers.size > 0) {
+        continue;
+      }
+      this.log.info(
+        `stopping idle stream ${serial} before starting ${incomingSerial} (HomeBase single-stream limit)`,
+      );
+      await this.stopPhysicalStream(serial);
+      stopped = true;
+    }
+    if (stopped) {
+      await delay(this.opts.preemptPauseMs);
+    }
   }
 
   /** Stop any other running stream to honour the single-stream limit. */
@@ -262,7 +335,7 @@ export class StreamManager extends EventEmitter {
         continue;
       }
       this.log.warn(
-        `pre-empting stream ${serial} for ${incomingSerial} (HomeBase 3 limit)`,
+        `pre-empting stream ${serial} for ${incomingSerial} (HomeBase single-stream limit)`,
       );
       for (const consumerId of physical.consumers) {
         this.emit(

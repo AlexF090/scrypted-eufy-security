@@ -167,18 +167,6 @@ export class DirectEufyClient extends EventEmitter implements IEufyClient {
         this.logger.info(
           `station livestream start: ${device.getSerial()} metadata=${JSON.stringify(metadata)}`,
         );
-        let videoBytes = 0;
-        let audioBytes = 0;
-        videoStream.on("data", (c: Buffer) => (videoBytes += c.length));
-        audioStream.on("data", (c: Buffer) => (audioBytes += c.length));
-        const logInterval = setInterval(() => {
-          this.logger.info(
-            `station livestream progress: ${device.getSerial()} video=${videoBytes}B audio=${audioBytes}B`,
-          );
-        }, 5000);
-        const clearProgress = (): void => clearInterval(logInterval);
-        videoStream.once("close", clearProgress);
-        videoStream.once("end", clearProgress);
         videoStream.on("error", (err) => {
           this.logger.error(
             `videoStream error for ${device.getSerial()}: ${err.message}`,
@@ -271,6 +259,7 @@ export class DirectEufyClient extends EventEmitter implements IEufyClient {
       name: s.getName(),
       model: s.getModel(),
       guardMode: Number(s.getGuardMode() ?? 0),
+      isSingleStreamStation: isSingleStreamStation(s),
     }));
   }
 
@@ -291,7 +280,15 @@ export class DirectEufyClient extends EventEmitter implements IEufyClient {
   async startLivestream(deviceSerial: string): Promise<void> {
     this.logger.info(`startStationLivestream(${deviceSerial})`);
     try {
-      await this.requireClient().startStationLivestream(deviceSerial);
+      const client = this.requireClient();
+      // Ensure the station's P2P session is connecting before we enqueue the
+      // start-stream command.  For HomeBase 2 (and similar) the P2P handshake
+      // can take 20-40 s; without an explicit kick-off the command sits in the
+      // send-queue past our start timeout.  connectToStation() is idempotent
+      // (no-op when already connecting/connected) and fast (in-memory lookups).
+      const device = await client.getDevice(deviceSerial);
+      await client.connectToStation(device.getStationSerial()).catch(() => undefined);
+      await client.startStationLivestream(deviceSerial);
       this.logger.info(`startStationLivestream(${deviceSerial}) call returned`);
     } catch (err) {
       this.logger.error(
@@ -375,6 +372,12 @@ function isDeviceOnline(
   } catch {
     return true;
   }
+}
+
+function isSingleStreamStation(
+  station: import("eufy-security-client").Station,
+): boolean {
+  return station.isStationHomeBase3() || station.isStationHomeBase2OrOlder();
 }
 
 // VideoCodec enum (eufy-security-client p2p/types.ts): UNKNOWN=-1, H264=0, H265=1

@@ -11,7 +11,7 @@ Google Home und Home Assistant bridgen.
 ## Features
 
 - ✅ Direkte `eufy-security-client` Integration — keine Middleware, kein externer Prozess
-- ✅ Eufy HomeBase 3 (S380) Unterstützung
+- ✅ Eufy HomeBase 2/3 Unterstützung
 - ✅ HomeKit Secure Video (HKSV) über das Scrypted HomeKit Plugin
 - ✅ P2P Live-Streaming (H.264 / H.265)
 - ✅ Bewegungserkennung (Person, Tier, Fahrzeug, Sound)
@@ -21,7 +21,7 @@ Google Home und Home Assistant bridgen.
 - ✅ Automatischer Reconnect mit exponentiellem Backoff
 - ✅ Node.js 20+ kompatibel (via `enableEmbeddedPKCS1Support`)
 - ✅ Fallback auf Legacy-Crypto Child-Process bei Bedarf
-- ⚠️ HomeBase 3: max. 1 Stream gleichzeitig (Hardware-Limitierung)
+- ⚠️ HomeBase 2/älter und HomeBase 3: max. 1 Stream gleichzeitig
 
 ## Voraussetzungen
 
@@ -42,13 +42,13 @@ Gib deine Zugangsdaten in den Settings ein → Geräte werden automatisch erkann
 3. Scanne den QR-Code in der Apple Home App.
 4. HKSV aktiviert sich automatisch, wenn du einen iCloud Plan hast (Home 50 GB+).
 
-## Streaming & Prebuffer (HomeBase 3)
+## Streaming & Prebuffer (Single-Stream HomeBases)
 
-Die HomeBase 3 erlaubt **nur einen aktiven Stream gleichzeitig**. Das Plugin
-deaktiviert deshalb Scrypteds automatisches Prebuffering standardmäßig für alle
-Kameras — alle Kameras zu prebuffern würde pro Kamera einen Dauerstream
-erfordern, was die Hardware nicht kann (und früher beim Start eine endlose
-Stream-Preemption-Schleife verursachte).
+HomeBase 2/älter und HomeBase 3 erlauben **nur einen aktiven Kamera-Stream
+gleichzeitig**. Das Plugin deaktiviert deshalb Scrypteds automatisches
+Prebuffering standardmäßig für alle Kameras — alle Kameras zu prebuffern würde
+pro Kamera einen Dauerstream erfordern, was die Hardware nicht kann (und früher
+beim Start eine endlose Stream-Preemption-Schleife verursachte).
 
 - **Prebuffer-Kamera** (Plugin-Setting): Wähle die eine Kamera, die dauerhaft
   einen Prebuffer-Stream hält. Diese Kamera bekommt sofortigen Live-View und
@@ -61,10 +61,11 @@ Stream-Preemption-Schleife verursachte).
 
 ## Bekannte Einschränkungen
 
-- **HomeBase 3:** Es kann nur eine Kamera gleichzeitig streamen (Eufy Hardware-Limitierung).
+- **HomeBase 2/älter und HomeBase 3:** Es kann nur eine Kamera gleichzeitig streamen.
 - **RTSP** direkter Zugriff auf HomeBase 3 ist seit Firmware März 2026 defekt — das Plugin
   umgeht dies durch direktes P2P.
-- **Stream-Start** dauert 3–10 Sekunden (P2P-Verbindungsaufbau zur HomeBase).
+- **Stream-Start** dauert je nach Wake-up und P2P-Verbindungsaufbau der
+  Station 3–40 Sekunden.
 - **HKSV-Pre-Roll** gibt es nur für die gewählte Prebuffer-Kamera; Aufnahmen
   anderer Kameras beginnen erst beim Bewegungsereignis.
 
@@ -85,7 +86,7 @@ ablehnt (CVE-2023-46809). Das Plugin handhabt dies in zwei Stufen:
 Scrypted Prozess
   EufySecurityPlugin (DeviceProvider, Settings, DeviceDiscovery)
     ├── EufyClient    (DirectEufyClient | ChildProcessEufyClient)
-    ├── StreamManager (Session-Lifecycle, HomeBase 3 Limit)
+    ├── StreamManager (Session-Lifecycle, HomeBase Single-Stream-Limit)
     ├── EufyCamera[]  (Camera, VideoCamera, MotionSensor, Intercom, [PanTiltZoom])
     └── EufyStation[] (SecuritySystem)
 ```

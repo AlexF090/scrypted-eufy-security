@@ -66,6 +66,8 @@ export interface StationInfo {
   name: string;
   model: string;
   guardMode: number;
+  /** True for HomeBase generations that allow only one active camera stream. */
+  isSingleStreamStation: boolean;
 }
 
 /**
@@ -182,7 +184,7 @@ export class StreamTimeoutError extends Error {
 
 /**
  * Thrown to an existing stream consumer when its session is pre-empted because
- * of the HomeBase 3 single-stream hardware limit.
+ * of the HomeBase single-stream hardware limit.
  */
 export class StreamInterruptedError extends Error {
   constructor(deviceSerial: string) {
@@ -193,8 +195,8 @@ export class StreamInterruptedError extends Error {
 
 /**
  * Thrown by requestStream() when a background (non-interactive) request arrives
- * while another camera's stream just started and the minimum stream duration
- * has not yet elapsed. The Rebroadcast plugin will retry after 5 s.
+ * while another camera has an active consumer on a single-stream station. The
+ * Rebroadcast plugin will retry after 5 s.
  */
 export class StreamBusyError extends Error {
   constructor(deviceSerial: string) {

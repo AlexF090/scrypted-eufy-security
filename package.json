@@ -1,6 +1,6 @@
 {
   "name": "scrypted-eufy-security",
-  "version": "1.0.0-rc.11",
+  "version": "1.0.0-rc.12",
   "description": "Eufy Security plugin for Scrypted — direct eufy-security-client integration",
   "main": "dist/plugin.zip",
   "files": [

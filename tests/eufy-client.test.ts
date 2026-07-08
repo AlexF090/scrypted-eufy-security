@@ -5,8 +5,8 @@ class FakeEufySecurity extends EventEmitter {
   static initialize = jest.fn();
   connect = jest.fn(async () => undefined);
   close = jest.fn(async () => undefined);
-  getStations = jest.fn(async () => []);
-  getDevices = jest.fn(async () => []);
+  getStations = jest.fn(async (): Promise<any[]> => []);
+  getDevices = jest.fn(async (): Promise<any[]> => []);
   getDevice = jest.fn(async (serial: string) => ({
     getSerial: () => serial,
     getStationSerial: () => "HB3",
@@ -16,6 +16,7 @@ class FakeEufySecurity extends EventEmitter {
     isLiveStreaming: () => true,
     panAndTilt: jest.fn(),
   }));
+  connectToStation = jest.fn(async () => undefined);
   startStationLivestream = jest.fn(async () => undefined);
   stopStationLivestream = jest.fn(async () => undefined);
   panAndTilt = jest.fn(async () => undefined);
@@ -131,6 +132,43 @@ describe("DirectEufyClient", () => {
     expect(fake.stopStationLivestream).toHaveBeenCalledWith("CAM1");
 
     expect(await client.isLiveStreaming("CAM1")).toBe(true);
+  });
+
+  it("marks HomeBase 2-or-older stations as single-stream", async () => {
+    const fake = new FakeEufySecurity();
+    fake.getStations = jest.fn(async () => [
+      {
+        getSerial: () => "HB2",
+        getName: () => "HomeBase 2",
+        getModel: () => "T8010",
+        getGuardMode: () => 0,
+        isStationHomeBase3: () => false,
+        isStationHomeBase2OrOlder: () => true,
+      },
+      {
+        getSerial: () => "SOLO",
+        getName: () => "Solo Cam",
+        getModel: () => "T8200",
+        getGuardMode: () => 0,
+        isStationHomeBase3: () => false,
+        isStationHomeBase2OrOlder: () => false,
+      },
+    ]);
+    FakeEufySecurity.initialize.mockImplementation(async () => fake);
+    const client = new DirectEufyClient(config);
+    await client.connect();
+
+    const stations = await client.getStations();
+    expect(stations).toEqual([
+      expect.objectContaining({
+        serial: "HB2",
+        isSingleStreamStation: true,
+      }),
+      expect.objectContaining({
+        serial: "SOLO",
+        isSingleStreamStation: false,
+      }),
+    ]);
   });
 
   it("re-emits motion events with the device serial", async () => {

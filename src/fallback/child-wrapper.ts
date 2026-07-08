@@ -56,6 +56,8 @@ function toStationInfo(station: Station): StationInfo {
     name: station.getName(),
     model: station.getModel(),
     guardMode: numberOrZero(station.getGuardMode()),
+    isSingleStreamStation:
+      station.isStationHomeBase3() || station.isStationHomeBase2OrOlder(),
   };
 }
 

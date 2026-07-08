@@ -41,7 +41,7 @@ export class EufySecurityPlugin
 {
   private readonly logger = new Logger("EufyPlugin");
   private client?: IEufyClient;
-  private streamManager?: StreamManager;
+  private readonly streamManagers = new Map<string, StreamManager>();
   private readonly cameras = new Map<string, EufyCamera>();
   private readonly stations = new Map<string, EufyStation>();
   private deviceInfos = new Map<string, DeviceInfo>();
@@ -118,7 +118,7 @@ export class EufySecurityPlugin
 
     this.client = await createEufyClient(config);
     this.registerClientEvents(this.client);
-    this.streamManager = new StreamManager(this.client);
+    // StreamManagers are created lazily per-station in getDevice().
     this.markStable();
 
     // Clear one-shot auth inputs after a successful connect.
@@ -142,6 +142,7 @@ export class EufySecurityPlugin
     });
     client.on("guardMode", (serial: string, mode: number) => {
       this.stations.get(serial)?.updateState(mode);
+      this.cameras.get(serial)?.updateGuardState(mode);
     });
     client.on("tfaRequest", () => {
       this.logger.warn("2FA required — enter the code in plugin settings");
@@ -210,10 +211,12 @@ export class EufySecurityPlugin
         `reconnect attempt ${this.reconnectAttempt} in ${wait}ms`,
       );
       await delay(wait);
-      await this.streamManager?.stopAll().catch(() => undefined);
+      await Promise.all(
+        [...this.streamManagers.values()].map((m) => m.stopAll().catch(() => undefined)),
+      );
       if (this.client) {
         await this.client.reconnect();
-        this.streamManager?.reset();
+        for (const m of this.streamManagers.values()) m.reset();
       } else {
         await this.connect();
       }
@@ -237,9 +240,11 @@ export class EufySecurityPlugin
     const devices = await this.client.getDevices();
 
     const manifest: Device[] = [];
+    const cameraSerials = new Set<string>();
 
     for (const device of devices) {
       this.deviceInfos.set(device.serial, device);
+      cameraSerials.add(device.serial);
       const interfaces: ScryptedInterface[] = [
         ScryptedInterface.Camera,
         ScryptedInterface.VideoCamera,
@@ -262,12 +267,20 @@ export class EufySecurityPlugin
 
     for (const station of stations) {
       this.stationInfos.set(station.serial, station);
-      manifest.push({
-        nativeId: station.serial,
-        name: station.name,
-        type: ScryptedDeviceType.SecuritySystem,
-        interfaces: [ScryptedInterface.SecuritySystem],
-      });
+      if (cameraSerials.has(station.serial)) {
+        // Standalone camera that is also its own station — fold SecuritySystem
+        // into the existing camera manifest entry instead of creating a second
+        // device with the same nativeId (which would silently replace it).
+        const existing = manifest.find((m) => m.nativeId === station.serial);
+        existing?.interfaces.push(ScryptedInterface.SecuritySystem);
+      } else {
+        manifest.push({
+          nativeId: station.serial,
+          name: station.name,
+          type: ScryptedDeviceType.SecuritySystem,
+          interfaces: [ScryptedInterface.SecuritySystem],
+        });
+      }
     }
 
     await deviceManager.onDevicesChanged({ devices: manifest });
@@ -310,7 +323,6 @@ export class EufySecurityPlugin
     if (
       this.connectInFlight &&
       (!this.client ||
-        !this.streamManager ||
         (!this.discoveryDone &&
           !this.deviceInfos.has(nativeId) &&
           !this.stationInfos.has(nativeId)))
@@ -318,27 +330,42 @@ export class EufySecurityPlugin
       await this.connectInFlight;
     }
 
-    if (!this.client || !this.streamManager) {
+    if (!this.client) {
       throw new Error("client not connected");
     }
 
     const deviceInfo = this.deviceInfos.get(nativeId);
     if (deviceInfo) {
       const config = this.buildConfig();
+      // Create a StreamManager per station so the single-stream limit is scoped
+      // to each HomeBase independently (cameras on different bases can stream
+      // simultaneously).
+      const stationSerial = deviceInfo.stationSerial;
+      if (!this.streamManagers.has(stationSerial)) {
+        const stInfo = this.stationInfos.get(stationSerial);
+        this.streamManagers.set(
+          stationSerial,
+          new StreamManager(this.client, {
+            maxConcurrentStreams: stInfo?.isSingleStreamStation ? 1 : Infinity,
+          }),
+        );
+      }
+      const streamManager = this.streamManagers.get(stationSerial)!;
       const camera = new EufyCamera(
         nativeId,
         this.client,
-        this.streamManager,
+        streamManager,
         deviceInfo,
         config.eventDurationSeconds,
         () => this.storage.getItem("prebufferSerial") === nativeId,
+        this.stationInfos.get(nativeId),
       );
       this.cameras.set(nativeId, camera);
       return camera as unknown as ScryptedDevice;
     }
 
     const stationInfo = this.stationInfos.get(nativeId);
-    if (stationInfo) {
+    if (stationInfo && !this.deviceInfos.has(nativeId)) {
       const station = new EufyStation(
         nativeId,
         this.client,
@@ -426,8 +453,8 @@ export class EufySecurityPlugin
 
   /**
    * Dropdown selecting the single camera that keeps a permanent prebuffer
-   * stream (HomeBase 3 allows only one stream). All other cameras report
-   * source "cloud" so the Rebroadcast plugin does not auto-prebuffer them.
+   * stream on single-stream HomeBases. All other cameras report source
+   * "cloud" so the Rebroadcast plugin does not auto-prebuffer them.
    */
   private buildPrebufferCameraSetting(): Setting {
     const none = "Keine";
@@ -479,13 +506,15 @@ export class EufySecurityPlugin
             c.cleanup().catch(() => undefined),
           ),
         );
-        await this.streamManager?.stopAll().catch(() => undefined);
-        this.streamManager?.destroy();
+        for (const mgr of this.streamManagers.values()) {
+          await mgr.stopAll().catch(() => undefined);
+          mgr.destroy();
+        }
+        this.streamManagers.clear();
         this.cameras.clear();
         this.stations.clear();
         this.deviceInfos.clear();
         this.stationInfos.clear();
-        this.streamManager = undefined;
         this.client?.removeAllListeners();
         await this.client?.disconnect().catch(() => undefined);
         this.client = undefined;
