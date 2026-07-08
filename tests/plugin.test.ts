@@ -34,6 +34,7 @@ const baseDevice = (over: Partial<DeviceInfo>): DeviceInfo => ({
   stationSerial: "HB3",
   hasPanAndTilt: false,
   hasIntercom: false,
+  hasBattery: false,
   isCamera: true,
   isOnline: true,
   ...over,
@@ -72,6 +73,7 @@ describe("EufySecurityPlugin discovery", () => {
     );
     expect(cam?.interfaces).not.toContain(ScryptedInterface.Intercom);
     expect(cam?.interfaces).not.toContain(ScryptedInterface.PanTiltZoom);
+    expect(cam?.interfaces).not.toContain(ScryptedInterface.Battery);
   });
 
   it("adds the PanTiltZoom interface only for PT cameras", async () => {
@@ -84,6 +86,19 @@ describe("EufySecurityPlugin discovery", () => {
     await bootPlugin([baseDevice({ hasIntercom: true })]);
     const cam = discoveredDevices().find((d) => d.nativeId === "CAM1");
     expect(cam?.interfaces).toContain(ScryptedInterface.Intercom);
+  });
+
+  it("adds the Battery interface and initial battery level for battery cameras", async () => {
+    const plugin = await bootPlugin([
+      baseDevice({ hasBattery: true, batteryLevel: 82, batteryLow: false }),
+    ]);
+    const cam = discoveredDevices().find((d) => d.nativeId === "CAM1");
+    expect(cam?.interfaces).toContain(ScryptedInterface.Battery);
+
+    const camera = (await plugin.getDevice("CAM1")) as unknown as {
+      batteryLevel?: number;
+    };
+    expect(camera.batteryLevel).toBe(82);
   });
 
   it("registers the station as a security system", async () => {
@@ -155,6 +170,19 @@ describe("EufySecurityPlugin discovery", () => {
     const [opts] = await camera.getVideoStreamOptions();
 
     expect(opts.audio).toBeNull();
+  });
+
+  it("updates battery level from Eufy events", async () => {
+    const plugin = await bootPlugin([
+      baseDevice({ hasBattery: true, batteryLevel: 82 }),
+    ]);
+    const camera = (await plugin.getDevice("CAM1")) as unknown as {
+      batteryLevel?: number;
+    };
+
+    fakeClient.emit("batteryStatus", "CAM1", { batteryLevel: 74 });
+
+    expect(camera.batteryLevel).toBe(74);
   });
 
   it("rejects invalid cached snapshot bytes instead of labelling them JPEG", async () => {

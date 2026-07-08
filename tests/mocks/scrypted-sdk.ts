@@ -22,6 +22,7 @@ export class ScryptedDeviceBase {
   storage = new FakeStorage();
   motionDetected?: boolean;
   securitySystemState?: unknown;
+  batteryLevel?: number;
   constructor(nativeId?: string) {
     this.nativeId = nativeId;
   }
@@ -37,6 +38,7 @@ export enum ScryptedInterface {
   Intercom = "Intercom",
   PanTiltZoom = "PanTiltZoom",
   SecuritySystem = "SecuritySystem",
+  Battery = "Battery",
   Settings = "Settings",
 }
 

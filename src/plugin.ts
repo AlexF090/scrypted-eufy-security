@@ -23,6 +23,7 @@ import { createEufyClient } from "./eufy-client";
 import { EufyStation } from "./station";
 import { StreamManager } from "./stream-manager";
 import {
+  type BatteryStatus,
   type DeviceInfo,
   type EufyPluginConfig,
   type IEufyClient,
@@ -144,6 +145,18 @@ export class EufySecurityPlugin
       this.stations.get(serial)?.updateState(mode);
       this.cameras.get(serial)?.updateGuardState(mode);
     });
+    client.on("batteryStatus", (serial: string, status: BatteryStatus) => {
+      const deviceInfo = this.deviceInfos.get(serial);
+      if (deviceInfo) {
+        if (status.batteryLevel !== undefined) {
+          deviceInfo.batteryLevel = status.batteryLevel;
+        }
+        if (status.batteryLow !== undefined) {
+          deviceInfo.batteryLow = status.batteryLow;
+        }
+      }
+      this.cameras.get(serial)?.updateBatteryStatus(status);
+    });
     client.on("tfaRequest", () => {
       this.logger.warn("2FA required — enter the code in plugin settings");
     });
@@ -256,6 +269,9 @@ export class EufySecurityPlugin
       }
       if (device.hasPanAndTilt) {
         interfaces.push(ScryptedInterface.PanTiltZoom);
+      }
+      if (device.hasBattery) {
+        interfaces.push(ScryptedInterface.Battery);
       }
       manifest.push({
         nativeId: device.serial,

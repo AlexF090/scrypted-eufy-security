@@ -21,6 +21,7 @@ import type {
   ParentMessage,
 } from "./fallback/ipc-protocol";
 import {
+  type BatteryStatus,
   EufyCryptoError,
   PanTiltDirection,
   type DeviceInfo,
@@ -30,6 +31,12 @@ import {
   type StreamMetadata,
 } from "./types";
 import { Logger, isCryptoPaddingError, makeRequestId } from "./utils";
+
+const DEVICE_BATTERY_PROPERTY = "battery";
+const DEVICE_BATTERY_LOW_PROPERTIES = new Set([
+  "batteryLow",
+  "lowBatteryAlert",
+]);
 
 /** Build the serialisable subset of config handed to the child process. */
 function toChildConfig(config: EufyPluginConfig): ChildConfig {
@@ -154,6 +161,29 @@ export class DirectEufyClient extends EventEmitter implements IEufyClient {
     client.on("device person detected", motion);
     client.on("device pet detected", motion);
     client.on("device vehicle detected", motion);
+    client.on(
+      "device property changed",
+      (device: Dev, name: string, value: unknown) => {
+        const status = batteryStatusFromProperty(name, value);
+        if (status) {
+          this.emit("batteryStatus", device.getSerial(), status);
+        }
+      },
+    );
+    client.on("device low battery", (device: Dev, state: boolean) => {
+      this.emit("batteryStatus", device.getSerial(), { batteryLow: state });
+    });
+    client.on(
+      "device battery fully charged",
+      (device: Dev, state: boolean) => {
+        if (state) {
+          this.emit("batteryStatus", device.getSerial(), {
+            batteryLevel: 100,
+            batteryLow: false,
+          });
+        }
+      },
+    );
 
     client.on(
       "station livestream start",
@@ -274,6 +304,9 @@ export class DirectEufyClient extends EventEmitter implements IEufyClient {
       hasIntercom: d.hasCommand("deviceStartTalkback" as never),
       isCamera: d.isCamera(),
       isOnline: isDeviceOnline(d),
+      hasBattery: hasBattery(d),
+      batteryLevel: readBatteryLevel(d),
+      batteryLow: readBatteryLow(d),
     }));
   }
 
@@ -372,6 +405,83 @@ function isDeviceOnline(
   } catch {
     return true;
   }
+}
+
+function normalizeBatteryLevel(value: unknown): number | undefined {
+  const level = Number(value);
+  if (!Number.isFinite(level)) return undefined;
+  return Math.max(0, Math.min(100, Math.round(level)));
+}
+
+function normalizeBoolean(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes", "on"].includes(normalized)) return true;
+    if (["false", "0", "no", "off"].includes(normalized)) return false;
+  }
+  return undefined;
+}
+
+function hasBattery(device: import("eufy-security-client").Device): boolean {
+  try {
+    return device.hasBattery();
+  } catch {
+    return readBatteryLevel(device) !== undefined;
+  }
+}
+
+function readBatteryLevel(
+  device: import("eufy-security-client").Device,
+): number | undefined {
+  try {
+    const getBatteryValue = (
+      device as import("eufy-security-client").Device & {
+        getBatteryValue?: () => unknown;
+      }
+    ).getBatteryValue;
+    if (typeof getBatteryValue === "function") {
+      return normalizeBatteryLevel(getBatteryValue.call(device));
+    }
+  } catch {
+    // fall through to generic property lookup
+  }
+  try {
+    return normalizeBatteryLevel(device.getPropertyValue(DEVICE_BATTERY_PROPERTY));
+  } catch {
+    return undefined;
+  }
+}
+
+function readBatteryLow(
+  device: import("eufy-security-client").Device,
+): boolean | undefined {
+  for (const property of DEVICE_BATTERY_LOW_PROPERTIES) {
+    try {
+      const value = device.getPropertyValue(property);
+      const normalized = normalizeBoolean(value);
+      if (normalized !== undefined) return normalized;
+    } catch {
+      // try the next low-battery property name
+    }
+  }
+  return undefined;
+}
+
+function batteryStatusFromProperty(
+  name: string,
+  value: unknown,
+): BatteryStatus | undefined {
+  if (name === DEVICE_BATTERY_PROPERTY) {
+    const batteryLevel = normalizeBatteryLevel(value);
+    return batteryLevel === undefined ? undefined : { batteryLevel };
+  }
+  if (DEVICE_BATTERY_LOW_PROPERTIES.has(name)) {
+    const batteryLow = normalizeBoolean(value);
+    return batteryLow === undefined ? undefined : { batteryLow };
+  }
+  return undefined;
 }
 
 function isSingleStreamStation(
@@ -611,6 +721,9 @@ export class ChildProcessEufyClient
         break;
       case "event:guardMode":
         this.emit("guardMode", msg.stationSerial, msg.mode);
+        break;
+      case "event:batteryStatus":
+        this.emit("batteryStatus", msg.deviceSerial, msg.status);
         break;
       case "event:talkbackStart":
         this.emit("talkbackStart", msg.deviceSerial);

@@ -80,8 +80,21 @@ export interface DeviceInfo {
   stationSerial: string;
   hasPanAndTilt: boolean;
   hasIntercom: boolean;
+  hasBattery: boolean;
+  batteryLevel?: number;
+  batteryLow?: boolean;
   isCamera: boolean;
   isOnline: boolean;
+}
+
+/**
+ * Battery update payload emitted by the Eufy client adapters. Partial because
+ * different Eufy events report either the current percentage or low-battery
+ * state independently.
+ */
+export interface BatteryStatus {
+  batteryLevel?: number;
+  batteryLow?: boolean;
 }
 
 /**
@@ -152,6 +165,7 @@ export interface EufyClientEvents {
   livestreamStop: (deviceSerial: string) => void;
   livestreamError: (deviceSerial: string, error: Error) => void;
   guardMode: (stationSerial: string, mode: number) => void;
+  batteryStatus: (deviceSerial: string, status: BatteryStatus) => void;
   talkbackStart: (deviceSerial: string) => void;
   stationAdded: (station: StationInfo) => void;
   deviceAdded: (device: DeviceInfo) => void;

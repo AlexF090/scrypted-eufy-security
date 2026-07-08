@@ -171,6 +171,46 @@ describe("DirectEufyClient", () => {
     ]);
   });
 
+  it("maps battery devices and re-emits battery property updates", async () => {
+    const fake = new FakeEufySecurity();
+    const fakeDevice = {
+      getSerial: () => "CAM1",
+      getName: () => "Camera 1",
+      getModel: () => "T8142",
+      getStationSerial: () => "HB2",
+      hasCommand: () => false,
+      isCamera: () => true,
+      hasBattery: () => true,
+      getBatteryValue: () => "76",
+      getPropertyValue: (name: string) =>
+        ({
+          state: 1,
+          battery: "76",
+          lowBatteryAlert: false,
+        })[name],
+    };
+    fake.getDevices = jest.fn(async () => [fakeDevice]);
+    FakeEufySecurity.initialize.mockImplementation(async () => fake);
+    const client = new DirectEufyClient(config);
+    await client.connect();
+
+    await expect(client.getDevices()).resolves.toEqual([
+      expect.objectContaining({
+        serial: "CAM1",
+        hasBattery: true,
+        batteryLevel: 76,
+        batteryLow: false,
+      }),
+    ]);
+
+    const seen: unknown[] = [];
+    client.on("batteryStatus", (_serial, status) => seen.push(status));
+    fake.emit("device property changed", fakeDevice, "battery", "74");
+    fake.emit("device low battery", fakeDevice, true);
+
+    expect(seen).toEqual([{ batteryLevel: 74 }, { batteryLow: true }]);
+  });
+
   it("re-emits motion events with the device serial", async () => {
     const fake = new FakeEufySecurity();
     FakeEufySecurity.initialize.mockImplementation(async () => fake);

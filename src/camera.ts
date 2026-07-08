@@ -8,6 +8,7 @@ import sdk, {
   ScryptedDeviceBase,
   ScryptedMimeTypes,
   SecuritySystemMode,
+  type Battery,
   type Camera,
   type FFmpegInput,
   type Intercom,
@@ -29,7 +30,7 @@ import { Transform, type Readable } from "stream";
 import { PtzController, type PanTiltZoomCommand } from "./ptz";
 import type { StreamManager, StreamSession } from "./stream-manager";
 import { TalkbackController } from "./talkback";
-import { GuardMode, StreamBusyError, type DeviceInfo, type IEufyClient, type StationInfo, type StreamMetadata } from "./types";
+import { GuardMode, StreamBusyError, type BatteryStatus, type DeviceInfo, type IEufyClient, type StationInfo, type StreamMetadata } from "./types";
 import { Logger, withTimeout } from "./utils";
 
 const { mediaManager } = sdk;
@@ -447,7 +448,7 @@ function streamShape(
  */
 export class EufyCamera
   extends ScryptedDeviceBase
-  implements Camera, VideoCamera, MotionSensor, Intercom, Settings, SecuritySystem
+  implements Camera, VideoCamera, MotionSensor, Intercom, Settings, SecuritySystem, Battery
 {
   private readonly logger: Logger;
   private readonly ptz?: PtzController;
@@ -477,6 +478,9 @@ export class EufyCamera
       this.ptz = new PtzController(client, deviceInfo.serial);
     }
     this.motionDetected = false;
+    if (deviceInfo.batteryLevel !== undefined) {
+      this.batteryLevel = deviceInfo.batteryLevel;
+    }
     if (stationInfo) {
       this.updateGuardState(stationInfo.guardMode);
     }
@@ -496,6 +500,15 @@ export class EufyCamera
         this.motionDetected = false;
         this.motionTimer = undefined;
       }, this.eventDurationSeconds * 1000);
+    }
+  }
+
+  // ---- Battery ---------------------------------------------------------------
+
+  /** Update battery state; called from plugin event routing. */
+  updateBatteryStatus(status: BatteryStatus): void {
+    if (status.batteryLevel !== undefined) {
+      this.batteryLevel = status.batteryLevel;
     }
   }
 
@@ -803,7 +816,7 @@ export class EufyCamera
   // ---- Settings --------------------------------------------------------------
 
   async getSettings(): Promise<Setting[]> {
-    return [
+    const settings: Setting[] = [
       {
         key: DISABLE_AUDIO_KEY,
         title: "Disable Stream Audio",
@@ -832,6 +845,23 @@ export class EufyCamera
         value: this.deviceInfo.isOnline,
       },
     ];
+    if (this.deviceInfo.hasBattery) {
+      settings.push({
+        key: "batteryLevel",
+        title: "Battery",
+        readonly: true,
+        type: "number",
+        value: this.batteryLevel ?? this.deviceInfo.batteryLevel ?? "",
+      });
+      settings.push({
+        key: "batteryLow",
+        title: "Low Battery",
+        readonly: true,
+        type: "boolean",
+        value: this.deviceInfo.batteryLow ?? false,
+      });
+    }
+    return settings;
   }
 
   async putSetting(

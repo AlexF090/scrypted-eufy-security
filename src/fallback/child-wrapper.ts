@@ -19,8 +19,14 @@ import {
 } from "eufy-security-client";
 import type { EventEmitter } from "events";
 import type { Readable } from "stream";
-import type { DeviceInfo, StationInfo, StreamMetadata } from "../types";
+import type { BatteryStatus, DeviceInfo, StationInfo, StreamMetadata } from "../types";
 import type { ChildConfig, ChildMessage, ParentMessage } from "./ipc-protocol";
+
+const DEVICE_BATTERY_PROPERTY = "battery";
+const DEVICE_BATTERY_LOW_PROPERTIES = new Set([
+  "batteryLow",
+  "lowBatteryAlert",
+]);
 
 /** Send a typed message to the parent. No-op if the IPC channel is closed. */
 function send(message: ChildMessage): void {
@@ -69,6 +75,77 @@ function isDeviceOnline(device: Device): boolean {
   }
 }
 
+function normalizeBatteryLevel(value: unknown): number | undefined {
+  const level = Number(value);
+  if (!Number.isFinite(level)) return undefined;
+  return Math.max(0, Math.min(100, Math.round(level)));
+}
+
+function normalizeBoolean(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes", "on"].includes(normalized)) return true;
+    if (["false", "0", "no", "off"].includes(normalized)) return false;
+  }
+  return undefined;
+}
+
+function hasBattery(device: Device): boolean {
+  try {
+    return device.hasBattery();
+  } catch {
+    return readBatteryLevel(device) !== undefined;
+  }
+}
+
+function readBatteryLevel(device: Device): number | undefined {
+  try {
+    const getBatteryValue = (
+      device as Device & { getBatteryValue?: () => unknown }
+    ).getBatteryValue;
+    if (typeof getBatteryValue === "function") {
+      return normalizeBatteryLevel(getBatteryValue.call(device));
+    }
+  } catch {
+    // fall through to generic property lookup
+  }
+  try {
+    return normalizeBatteryLevel(device.getPropertyValue(DEVICE_BATTERY_PROPERTY));
+  } catch {
+    return undefined;
+  }
+}
+
+function readBatteryLow(device: Device): boolean | undefined {
+  for (const property of DEVICE_BATTERY_LOW_PROPERTIES) {
+    try {
+      const value = device.getPropertyValue(property);
+      const normalized = normalizeBoolean(value);
+      if (normalized !== undefined) return normalized;
+    } catch {
+      // try the next low-battery property name
+    }
+  }
+  return undefined;
+}
+
+function batteryStatusFromProperty(
+  name: string,
+  value: unknown,
+): BatteryStatus | undefined {
+  if (name === DEVICE_BATTERY_PROPERTY) {
+    const batteryLevel = normalizeBatteryLevel(value);
+    return batteryLevel === undefined ? undefined : { batteryLevel };
+  }
+  if (DEVICE_BATTERY_LOW_PROPERTIES.has(name)) {
+    const batteryLow = normalizeBoolean(value);
+    return batteryLow === undefined ? undefined : { batteryLow };
+  }
+  return undefined;
+}
+
 function toDeviceInfo(device: Device): DeviceInfo {
   return {
     serial: device.getSerial(),
@@ -79,6 +156,9 @@ function toDeviceInfo(device: Device): DeviceInfo {
     hasIntercom: device.hasCommand("deviceStartTalkback" as never),
     isCamera: device.isCamera(),
     isOnline: isDeviceOnline(device),
+    hasBattery: hasBattery(device),
+    batteryLevel: readBatteryLevel(device),
+    batteryLow: readBatteryLow(device),
   };
 }
 
@@ -155,6 +235,38 @@ class ChildWrapper {
     );
     client.on("device sound detected", (device: Device, state: boolean) =>
       send({ type: "event:soundDetected", deviceSerial: device.getSerial(), state }),
+    );
+    client.on(
+      "device property changed",
+      (device: Device, name: string, value: unknown) => {
+        const status = batteryStatusFromProperty(name, value);
+        if (status) {
+          send({
+            type: "event:batteryStatus",
+            deviceSerial: device.getSerial(),
+            status,
+          });
+        }
+      },
+    );
+    client.on("device low battery", (device: Device, state: boolean) =>
+      send({
+        type: "event:batteryStatus",
+        deviceSerial: device.getSerial(),
+        status: { batteryLow: state },
+      }),
+    );
+    client.on(
+      "device battery fully charged",
+      (device: Device, state: boolean) => {
+        if (state) {
+          send({
+            type: "event:batteryStatus",
+            deviceSerial: device.getSerial(),
+            status: { batteryLevel: 100, batteryLow: false },
+          });
+        }
+      },
     );
 
     client.on(

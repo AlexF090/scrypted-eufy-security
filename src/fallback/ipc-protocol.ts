@@ -1,4 +1,4 @@
-import type { DeviceInfo, StationInfo, StreamMetadata } from "../types";
+import type { BatteryStatus, DeviceInfo, StationInfo, StreamMetadata } from "../types";
 
 /**
  * Messages sent from the parent (Scrypted process) to the legacy-crypto child.
@@ -43,6 +43,7 @@ export type ChildMessage =
   | { type: "event:livestreamStop"; deviceSerial: string }
   | { type: "event:livestreamError"; deviceSerial: string; message: string }
   | { type: "event:guardMode"; stationSerial: string; mode: number }
+  | { type: "event:batteryStatus"; deviceSerial: string; status: BatteryStatus }
   | { type: "event:talkbackStart"; deviceSerial: string }
   | { type: "event:stationAdded"; station: StationInfo }
   | { type: "event:deviceAdded"; device: DeviceInfo }
